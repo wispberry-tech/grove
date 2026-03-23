@@ -8,6 +8,10 @@
 *.so
 *.dylib
 
+# Compiled binaries in root directory
+server
+wisp
+
 # Test binary, built with `go test -c`
 *.test
 
