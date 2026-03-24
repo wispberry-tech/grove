@@ -1,6 +1,6 @@
 # Template Syntax Reference
 
-Complete reference for Wisp template syntax.
+Complete reference for Wisp template syntax with explanations of how each construct works.
 
 ## Table of Contents
 
@@ -20,7 +20,7 @@ Complete reference for Wisp template syntax.
 
 ## Comments
 
-Comments are not rendered in the output.
+Comments are stripped during parsing and not rendered in the output.
 
 ```liquid
 {# This is a comment #}
@@ -29,13 +29,18 @@ Comments are not rendered in the output.
    are supported #}
 ```
 
+**How comments work:**
+1. Lexer treats `{#` ... `#}` as comment tokens
+2. Parser ignores comment content
+3. No output is generated - useful for documentation within templates
+
 ---
 
 ## Variables
 
 ### Simple Variables
 
-Access variables with a leading dot:
+Access variables from the data map with a leading dot:
 
 ```liquid
 {% .name %}
@@ -43,9 +48,14 @@ Access variables with a leading dot:
 {% .is_active %}
 ```
 
+**How variable access works:**
+1. Resolver looks up `.name` in the current scope
+2. Walks up parent scope chain if not found
+3. Returns the value or `nil` if not found
+
 ### Nested Access
 
-Access nested properties with dot notation:
+Dot notation for object/member access:
 
 ```liquid
 {% .user.name %}
@@ -53,16 +63,28 @@ Access nested properties with dot notation:
 {% .company.address.city %}
 ```
 
+**How nested access works:**
+1. Resolver gets `.user` from scope
+2. Accesses `.name` member on the result
+3. Continues for each level
+4. Returns `nil` if any level is missing
+
 ### Array/Map Indexing
 
-Access array elements and map keys:
+Access elements with bracket notation:
 
 ```liquid
-{% .items[0] %}           {# First item #}
-{% .items[-1] %}         {# Last item #}
-{% .data[key] %}         {# Map key access #}
-{% .matrix[0][1] %}      {# Nested array #}
+{% .items[0] %}           {# First item (0-indexed) #}
+{% .items[-1] %}           {# Last item #}
+{% .data[key] %}           {# Map key access #}
+{% .matrix[0][1] %}       {# Nested array #}
 ```
+
+**How indexing works:**
+- **Positive index**: Direct array access (0-based)
+- **Negative index**: Count from end (-1 = last, -2 = second-to-last)
+- **Map key**: Key lookup in map/slice-of-maps
+- **Chain**: `matrix[0][1]` gets row 0, column 1
 
 ### Chained Access
 
@@ -77,15 +99,21 @@ Combine all access patterns:
 
 ## Filters
 
-Filters transform values. Chain multiple filters with the pipe operator.
+Filters transform values. The output of one filter becomes the input of the next.
 
 ### Syntax
 
 ```liquid
-{% .value | filter_name %}
-{% .value | filter_name arg %}
-{% .value | filter1 | filter2 | filter3 %}
+{% .value | filter_name %}              {# No args #}
+{% .value | filter_name arg %}          {# One arg #}
+{% .value | filter1 | filter2 | filter3 %}  {# Chained #}
 ```
+
+**How filters work:**
+1. Value is passed as first argument to filter function
+2. Additional arguments are passed as-is
+3. Return value becomes the new value
+4. Multiple filters chain: output of one → input of next
 
 ### String Filters
 
@@ -179,9 +207,15 @@ Filters transform values. Chain multiple filters with the pipe operator.
 {% end %}
 ```
 
+**How if/elsif/else works:**
+1. Resolver evaluates the condition expression
+2. Go truthiness: non-nil, non-zero, non-empty, true = truthy
+3. Only the matching branch is evaluated
+4. `elsif` and `else` are optional
+
 ### Unless
 
-`unless` is the opposite of `if`:
+`unless` is the opposite of `if` - executes when condition is false:
 
 ```liquid
 {% unless .hide %}
@@ -189,8 +223,7 @@ Filters transform values. Chain multiple filters with the pipe operator.
 {% end %}
 ```
 
-Equivalent to:
-
+**Equivalent to:**
 ```liquid
 {% if not .hide %}
     Content shown when .hide is false
@@ -198,6 +231,8 @@ Equivalent to:
 ```
 
 ### Case / When
+
+Match one value against multiple conditions:
 
 ```liquid
 {% case .status %}
@@ -212,11 +247,19 @@ Equivalent to:
 {% end %}
 ```
 
+**How case/when works:**
+1. Evaluates the case expression once (`.status`)
+2. Compares against each `when` value
+3. Executes first matching branch
+4. Falls through to `else` if no match
+
 ---
 
 ## Loops
 
 ### For Loop
+
+Iterate over arrays, slices, maps, or ranges:
 
 ```liquid
 {% for .item in .items %}
@@ -224,13 +267,18 @@ Equivalent to:
 {% end %}
 ```
 
-With index:
-
+**With index:**
 ```liquid
 {% for .index, .item in .items %}
     <li>{%.index%}: {%.item%}</li>
 {% end %}
 ```
+
+**How for loops work:**
+1. Resolves the iterable (array, slice, map, or range)
+2. Creates loop variable in scope for each iteration
+3. Optionally creates index variable
+4. Processes `for` ... `end` block for each item
 
 ### Range Loop
 
@@ -243,7 +291,13 @@ Loop over a numeric range:
 {# Outputs: 1 2 3 4 5 #}
 ```
 
+**How range works:**
+- `(range start end)` generates integers from start to end (inclusive)
+- Useful for fixed iteration counts
+
 ### While Loop
+
+Loop while a condition is true:
 
 ```liquid
 {% while .condition %}
@@ -252,11 +306,19 @@ Loop over a numeric range:
 {% end %}
 ```
 
+**How while loops work:**
+1. Evaluates condition
+2. If truthy, executes body then repeats
+3. Subject to `SetMaxIterations()` limit for DoS prevention
+4. Use `assign` to modify variables within the loop
+
 ---
 
 ## Variable Assignment
 
 ### Assign
+
+Create or update variables:
 
 ```liquid
 {% assign .name = "value" %}
@@ -264,13 +326,19 @@ Loop over a numeric range:
 {% assign .user.name = "New Name" %}
 ```
 
+**How assign works:**
+1. Creates or updates variable in current scope
+2. Right side is evaluated as expression
+3. Can use filters: `{% assign .x = .y | upcase %}`
+4. Supports nested assignment: `.user.name`
+
 ---
 
 ## Context Blocks
 
 ### With
 
-Isolate scope for a variable:
+Isolate scope for a nested variable:
 
 ```liquid
 {% with .user %}
@@ -279,9 +347,14 @@ Isolate scope for a variable:
 {% end %}
 ```
 
+**How with works:**
+1. Creates child scope initialized with `.user` as root
+2. Variables inside refer to `.user.name`, `.user.email`, etc.
+3. Useful for cleaning up deeply nested access
+
 ### Cycle
 
-Alternate between values:
+Alternate between values on each iteration:
 
 ```liquid
 {% for .item in .items %}
@@ -291,12 +364,24 @@ Alternate between values:
 {% end %}
 ```
 
+**How cycle works:**
+- Maintains internal counter across iterations
+- Cycles through provided values in order
+- Useful for zebra striping, alternating content
+
 ### Increment/Decrement
 
+Counter variables that persist across loop iterations:
+
 ```liquid
-{% increment .counter %}
-{% decrement .counter %}
+{% increment .counter %}  {# Starts at 0, increments each call #}
+{% decrement .counter %}  {# Decrements #}
 ```
+
+**How increment/decrement works:**
+- Creates/updates a special counter variable
+- Persists across loop iterations within same scope
+- Useful for unique IDs, numbering
 
 ---
 
@@ -304,29 +389,47 @@ Alternate between values:
 
 ### Include
 
-Include and evaluate another template:
+Include and evaluate another template with **shared scope**:
 
 ```liquid
 {% include "partials/header" %}
 {% include "partials/footer" .data %}
 ```
 
+**How include works:**
+1. Loads template from store (or filesystem)
+2. Parses and evaluates in the **current scope**
+3. Included template has access to parent variables
+4. Good for: headers, footers, small partials
+
 ### Render
 
-Render with isolated scope:
+Render a template with **isolated scope**:
 
 ```liquid
 {% render "widgets/sidebar" .sidebar_data %}
 ```
 
+**How render works:**
+1. Loads and parses template
+2. Creates **new child scope** with passed data
+3. Template cannot access parent scope variables
+4. Good for: widgets, sandboxed components
+
 ### Component
 
-Props-based component:
+Props-based component system:
 
 ```liquid
 {% component "Button" .buttonProps %}
 {% component "Card" title=.title body=.body %}
 ```
+
+**How component works:**
+1. Looks up component by name in registry
+2. Passes props as data to component template
+3. Component has isolated scope
+4. Good for: reusable UI components
 
 ---
 
@@ -334,7 +437,7 @@ Props-based component:
 
 ### Extends
 
-Child template extends a parent:
+Child template inherits from a parent layout:
 
 ```liquid
 {# child.html #}
@@ -347,7 +450,7 @@ Child template extends a parent:
 
 ### Block
 
-Define or override a block:
+Define replaceable sections in parent:
 
 ```liquid
 {% block title %}Default Title{% endblock %}
@@ -359,13 +462,19 @@ Define or override a block:
 
 ### Content
 
-Provide content for parent blocks:
+Provide content for parent blocks from child:
 
 ```liquid
 {% content %}
     Main page content
 {% endcontent %}
 ```
+
+**How layout inheritance works:**
+1. Parser records `extends` relationship
+2. Parent template is loaded and blocks extracted
+3. Child blocks override parent block content
+4. At render, blocks are merged: parent content with child overrides
 
 ---
 
@@ -376,10 +485,16 @@ Capture output to a variable:
 ```liquid
 {% capture .output %}
     Captured content: {%.value%}
-{% endcapture %}
+{%endcapture%}
 
 {% .output %}  {# Use captured content #}
 ```
+
+**How capture works:**
+1. Evaluates content without outputting
+2. Stores result in specified variable
+3. Variable is available for later use
+4. Useful for building complex strings
 
 ---
 
@@ -420,9 +535,14 @@ Output literal content without processing:
 ```liquid
 {% raw %}
     This {%.will_not%} be processed
-    {% if .ignored %}...
+    {% if .ignored %}...{% end %}
 {% endraw %}
 ```
+
+**How raw works:**
+1. Content inside is treated as plain text
+2. No variable resolution, filters, or control flow
+3. Useful for documentation or template examples
 
 ---
 
