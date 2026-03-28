@@ -371,7 +371,7 @@ func TestResolveExpression(t *testing.T) {
 	r := NewResolver(s)
 
 	// Test parsing and resolving an expression (using Wisp syntax)
-	l := lexer.NewLexer("{% x + y %}")
+	l := lexer.NewLexer("{% .x + .y %}")
 	p := parser.NewParser(l)
 	program := p.ParseProgram()
 

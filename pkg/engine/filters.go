@@ -356,21 +356,24 @@ func filterDefault(args ...interface{}) interface{} {
 	return val
 }
 
-func filterJSON(v interface{}) string {
-	// Simple JSON-like representation
+func filterJSON(v interface{}) evaluator.SafeString {
+	// Simple JSON-like representation; return as SafeString to prevent double HTML-escaping
+	var s string
 	switch val := v.(type) {
 	case nil:
-		return "null"
+		s = "null"
 	case bool:
 		if val {
-			return "true"
+			s = "true"
+		} else {
+			s = "false"
 		}
-		return "false"
 	case string:
-		return fmt.Sprintf("%q", val)
+		s = fmt.Sprintf("%q", val)
 	default:
-		return fmt.Sprintf("%v", val)
+		s = fmt.Sprintf("%v", val)
 	}
+	return evaluator.SafeString{Value: s}
 }
 
 // Helper functions
@@ -386,6 +389,13 @@ func toSlice(v interface{}) []interface{} {
 	}
 	if items, ok := v.([]interface{}); ok {
 		return items
+	}
+	if items, ok := v.([]string); ok {
+		result := make([]interface{}, len(items))
+		for i, s := range items {
+			result[i] = s
+		}
+		return result
 	}
 	return []interface{}{v}
 }
@@ -406,19 +416,20 @@ func filterRaw(v interface{}) evaluator.SafeString {
 	return evaluator.SafeString{Value: toString(v)}
 }
 
-// filterEscape HTML-escapes a value.
-func filterEscape(v interface{}) string {
-	return html.EscapeString(toString(v))
+// filterEscape HTML-escapes a value. Returns SafeString to prevent double-escaping.
+func filterEscape(v interface{}) evaluator.SafeString {
+	return evaluator.SafeString{Value: html.EscapeString(toString(v))}
 }
 
 // filterEscapeOnce escapes HTML but doesn't double-escape already escaped content.
-func filterEscapeOnce(v interface{}) string {
+// Returns SafeString to prevent further auto-escaping.
+func filterEscapeOnce(v interface{}) evaluator.SafeString {
 	s := toString(v)
 	// If it looks already escaped (&amp; etc), return as-is
 	if strings.Contains(s, "&amp;") || strings.Contains(s, "&lt;") || strings.Contains(s, "&gt;") || strings.Contains(s, "&#") {
-		return s
+		return evaluator.SafeString{Value: s}
 	}
-	return html.EscapeString(s)
+	return evaluator.SafeString{Value: html.EscapeString(s)}
 }
 
 // Date filters

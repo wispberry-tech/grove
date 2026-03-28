@@ -214,7 +214,7 @@ func TestEvaluateWithStatement(t *testing.T) {
 	e := NewEvaluator(s)
 
 	// Test evaluating a with statement
-	l := lexer.NewLexer(`{% with .user as .currentUser %}`)
+	l := lexer.NewLexer(`{% with .user as .u %}{% .u.Name %}{% end %}`)
 	p := parser.NewParser(l)
 	program := p.ParseProgram()
 
@@ -222,14 +222,13 @@ func TestEvaluateWithStatement(t *testing.T) {
 		t.Fatalf("Parser errors: %v", p.Errors())
 	}
 
-	_, err := e.Evaluate(program)
+	output, err := e.Evaluate(program)
 	if err != nil {
 		t.Errorf("Evaluate failed: %v", err)
 	}
-
-	// The with statement creates a new scope, so the variable is set in the child scope
-	// We can't check it from the parent scope
-	// Instead, we just verify that the evaluation succeeded
+	if output != "Bob" {
+		t.Errorf("Expected 'Bob', got %q", output)
+	}
 }
 
 func TestEvaluateCommentStatement(t *testing.T) {

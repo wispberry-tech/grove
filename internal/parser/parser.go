@@ -356,7 +356,7 @@ var precedences = map[lexer.TokenType]int{
 	lexer.ASTERISK: PRODUCT,
 	lexer.LPAREN:   CALL,
 	lexer.AS:       LOWEST,
-	lexer.IN:       LOWEST,
+	lexer.IN:       EQUALS,
 	lexer.COMMA:    LOWEST,
 }
 
@@ -405,6 +405,7 @@ func (p *Parser) registerInfix() {
 	p.infixParseFns[lexer.LTE] = parseInfixExpression
 	p.infixParseFns[lexer.GT] = parseInfixExpression
 	p.infixParseFns[lexer.GTE] = parseInfixExpression
+	p.infixParseFns[lexer.IN] = parseInfixExpression
 }
 
 func (p *Parser) noPrefixParseFnError(t lexer.TokenType) {
@@ -602,8 +603,8 @@ func parseStringLiteral(p *Parser) ast.Expression {
 func parsePipeExpression(p *Parser) ast.Expression {
 	pipeExpr := &ast.PipeExpression{Token: p.curTok}
 
-	// We're already at the identifier (function name), so just use it
-	if p.curTok.Type != lexer.IDENT {
+	// We're already at the function name token. Accept IDENT or keyword tokens (e.g. "raw").
+	if p.curTok.Type != lexer.IDENT && !isKeywordUsableAsIdent(p.curTok.Type) {
 		p.errors = append(p.errors, fmt.Sprintf("expected identifier after pipe, got %s", p.curTok.Type))
 		return nil
 	}
@@ -655,10 +656,10 @@ func (p *Parser) parseBodyStatements() (*ast.BlockStatement, lexer.TokenType) {
 				p.nextToken()
 				return body, p.curTok.Type
 			case *ast.ElsifStatement, *ast.WhenStatement:
-				// Add to body but also return the type so the caller knows what came next
+				// Add to body but also return the type so the caller knows what came next.
+				// Do NOT advance here — leave curTok at the %} of the elsif/when tag so
+				// callers can call parseBodyStatements() again and let it advance naturally.
 				body.Statements = append(body.Statements, s)
-				// Advance past the statement and return
-				p.nextToken()
 				switch s.(type) {
 				case *ast.ElsifStatement:
 					return body, lexer.ELSIF
@@ -867,6 +868,44 @@ func (p *Parser) parseWispVariableStatement() ast.Statement {
 		}
 	}
 
+	// Check if this is a piped filter expression: {% .v | filter %}
+	if p.peekTokIs(lexer.PIPE) {
+		var expr ast.Expression = dotExprTyped
+		for p.peekTokIs(lexer.PIPE) {
+			p.nextToken() // consume to PIPE
+			p.nextToken() // move past PIPE to function name
+			pipe, ok := parsePipeExpression(p).(*ast.PipeExpression)
+			if !ok || pipe == nil {
+				return nil
+			}
+			// Prepend the current expression as first argument to this pipe
+			pipe.Arguments = append([]ast.Expression{expr}, pipe.Arguments...)
+			expr = pipe
+		}
+
+		if !p.expectPeek(lexer.RBRACE_PCT) {
+			return nil
+		}
+
+		return &ast.ExpressionStatement{
+			Token:      dotExprTyped.Token,
+			Expression: expr,
+		}
+	}
+
+	// Check if there's an infix operator (e.g. {% .x + .y %})
+	if p.infixParseFns[p.peekTok.Type] != nil {
+		var expr ast.Expression = dotExprTyped
+		for p.infixParseFns[p.peekTok.Type] != nil {
+			p.nextToken()
+			expr = p.infixParseFns[p.curTok.Type](p, expr)
+		}
+		if !p.expectPeek(lexer.RBRACE_PCT) {
+			return nil
+		}
+		return &ast.ExpressionStatement{Token: dotExprTyped.Token, Expression: expr}
+	}
+
 	// Just a variable access: {% .name %}
 	// parseDotExpression no longer advances, so expectPeek should work
 	if !p.expectPeek(lexer.RBRACE_PCT) {
@@ -892,69 +931,50 @@ func (p *Parser) parseWispIfStatement() ast.Statement {
 		return nil
 	}
 
-	// Create a new scope for the if block
 	p.PushScope()
-
-	// Parse the consequence (statements between {% if %} and {% else %} or {% end %})
-	consequence := &ast.BlockStatement{Token: p.curTok}
-	consequence.Statements = []ast.Statement{}
-
-	// Move to the next token to start parsing the body
-	p.nextToken()
-
-	// Parse statements until we encounter else or end
-	for !p.curTokIs(lexer.ELSE) && !p.curTokIs(lexer.END) && !p.curTokIs(lexer.EOF) {
-		stmt := p.parseStatement()
-		if stmt != nil {
-			// Check if this is an else or end statement
-			if _, isElse := stmt.(*ast.ElseStatement); isElse {
-				// Stop parsing consequence
-				break
-			}
-			if _, isEnd := stmt.(*ast.EndStatement); isEnd {
-				// Stop parsing consequence
-				break
-			}
-			consequence.Statements = append(consequence.Statements, stmt)
-		}
-		p.nextToken()
-	}
-
-	stmt.Consequence = consequence
-
-	// Check if there's an else branch
-	if p.curTokIs(lexer.ELSE) {
-		// Parse the else branch
-		p.nextToken() // consume else
-
-		// Parse the alternative (statements between {% else %} and {% end %})
-		alternative := &ast.BlockStatement{Token: p.curTok}
-		alternative.Statements = []ast.Statement{}
-
-		// Parse statements until we encounter end
-		for !p.curTokIs(lexer.END) && !p.curTokIs(lexer.EOF) {
-			stmt := p.parseStatement()
-			if stmt != nil {
-				alternative.Statements = append(alternative.Statements, stmt)
-			}
-			p.nextToken()
-		}
-
-		stmt.Alternative = alternative
-	}
-
-	// Consume the end tag
-	if p.curTokIs(lexer.END) {
-		p.nextToken() // consume end
-		if !p.expectPeek(lexer.RBRACE_PCT) {
-			return nil
-		}
-	}
-
-	// Restore the parent scope
+	stmt.Consequence, stmt.Alternative = p.parseIfChain()
 	p.PopScope()
 
 	return stmt
+}
+
+// parseIfChain parses the body of an if/elsif statement and returns
+// (consequence, alternative). On entry, curTok is at %} (closing of the condition tag).
+// On exit, the final {% end %} has been consumed.
+func (p *Parser) parseIfChain() (*ast.BlockStatement, *ast.BlockStatement) {
+	body, termType := p.parseBodyStatements()
+
+	if termType == lexer.ELSIF {
+		// parseBodyStatements added the ElsifStatement as the last element and
+		// advanced past the %} of {% elsif %}, so curTok is now the first token
+		// of the elsif body.
+		var elsif *ast.ElsifStatement
+		if n := len(body.Statements); n > 0 {
+			if es, ok := body.Statements[n-1].(*ast.ElsifStatement); ok {
+				elsif = es
+				body.Statements = body.Statements[:n-1]
+			}
+		}
+		if elsif != nil {
+			inner := &ast.IfStatement{Token: elsif.Token, Condition: elsif.Condition}
+			inner.Consequence, inner.Alternative = p.parseIfChain()
+			return body, &ast.BlockStatement{Statements: []ast.Statement{inner}}
+		}
+	}
+
+	if termType == lexer.ELSE {
+		// curTok = {%,  peekTok = ELSE — consume {% else %}
+		p.nextToken()             // {%  → ELSE
+		p.expectPeek(lexer.RBRACE_PCT) // ELSE → %}
+		// parseBodyStatements will nextToken() past %} on entry
+		alt, _ := p.parseBodyStatements() // stops at {% end %}
+		p.consumeEndTag()
+		return body, alt
+	}
+
+	// termType == END: consume {% end %}
+	p.consumeEndTag()
+	return body, nil
 }
 
 // parseWispUnlessStatement parses an unless statement: {% unless .condition %}
@@ -972,12 +992,19 @@ func (p *Parser) parseWispUnlessStatement() ast.Statement {
 
 	// Parse the body statements
 	p.PushScope()
-	body, _ := p.parseBodyStatements()
+	body, termType := p.parseBodyStatements()
 	stmt.Consequence = body
-	p.PopScope()
 
-	// Consume the end tag
-	p.consumeEndTag()
+	if termType == lexer.ELSE {
+		p.nextToken()                  // {%  → ELSE
+		p.expectPeek(lexer.RBRACE_PCT) // ELSE → %}
+		alt, _ := p.parseBodyStatements()
+		stmt.Alternative = alt
+		p.consumeEndTag()
+	} else {
+		p.consumeEndTag()
+	}
+	p.PopScope()
 
 	return stmt
 }
@@ -1033,11 +1060,12 @@ func (p *Parser) parseWispForStatement() ast.Statement {
 
 	// Check for index variable: {% for .i, .item in .items %}
 	if p.peekTokIs(lexer.COMMA) {
-		p.nextToken() // consume comma
-		p.nextToken() // move to next identifier
+		p.nextToken() // consume to comma
+		p.nextToken() // move past comma
 		if p.curTokIs(lexer.DOT) {
-			p.nextToken() // consume dot
-			if !p.expectPeek(lexer.IDENT) {
+			p.nextToken() // move to identifier
+			if p.curTok.Type != lexer.IDENT {
+				p.errors = append(p.errors, fmt.Sprintf("expected identifier after dot, got %s", p.curTok.Type))
 				return nil
 			}
 			stmt.IndexVar = stmt.LoopVar
@@ -1053,6 +1081,18 @@ func (p *Parser) parseWispForStatement() ast.Statement {
 	// Parse the collection
 	p.nextToken()
 	stmt.Collection = p.parseExpression(LOWEST)
+
+	// Handle piped collection: {% for .i in .v | filter %}
+	for p.peekTokIs(lexer.PIPE) {
+		p.nextToken() // consume to PIPE
+		p.nextToken() // move past PIPE to function name
+		pipe, ok := parsePipeExpression(p).(*ast.PipeExpression)
+		if !ok || pipe == nil {
+			return nil
+		}
+		pipe.Arguments = append([]ast.Expression{stmt.Collection}, pipe.Arguments...)
+		stmt.Collection = pipe
+	}
 
 	// Expect %}
 	if !p.expectPeek(lexer.RBRACE_PCT) {
@@ -1249,8 +1289,9 @@ func (p *Parser) parseWispIncrementStatement() ast.Statement {
 	// Parse the variable
 	p.nextToken()
 	if p.curTokIs(lexer.DOT) {
-		p.nextToken()
-		if !p.expectPeek(lexer.IDENT) {
+		p.nextToken() // move to identifier
+		if p.curTok.Type != lexer.IDENT {
+			p.errors = append(p.errors, fmt.Sprintf("expected identifier after dot, got %s", p.curTok.Type))
 			return nil
 		}
 		stmt.Variable = &ast.Identifier{Token: p.curTok, Value: p.curTok.Literal}
@@ -1271,8 +1312,9 @@ func (p *Parser) parseWispDecrementStatement() ast.Statement {
 	// Parse the variable
 	p.nextToken()
 	if p.curTokIs(lexer.DOT) {
-		p.nextToken()
-		if !p.expectPeek(lexer.IDENT) {
+		p.nextToken() // move to identifier
+		if p.curTok.Type != lexer.IDENT {
+			p.errors = append(p.errors, fmt.Sprintf("expected identifier after dot, got %s", p.curTok.Type))
 			return nil
 		}
 		stmt.Variable = &ast.Identifier{Token: p.curTok, Value: p.curTok.Literal}
@@ -1525,4 +1567,10 @@ func (p *Parser) parseWispExpressionStatement() ast.Statement {
 	}
 
 	return stmt
+}
+
+// isKeywordUsableAsIdent returns true if a keyword token can be used as a filter/function name.
+func isKeywordUsableAsIdent(t lexer.TokenType) bool {
+	// Some keywords share names with built-in filters (e.g. "raw")
+	return t == lexer.RAW
 }

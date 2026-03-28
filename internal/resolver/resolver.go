@@ -166,10 +166,28 @@ func (r *Resolver) CallFunction(fn interface{}, args []interface{}) (interface{}
 		return nil, fmt.Errorf("not a function: %T", fn)
 	}
 
+	fnType := fnVal.Type()
+
 	// Convert arguments to reflect values
 	argVals := make([]reflect.Value, len(args))
 	for i, arg := range args {
-		argVals[i] = reflect.ValueOf(arg)
+		if arg == nil {
+			// Determine the expected type for this parameter position
+			var expectedType reflect.Type
+			if fnType.IsVariadic() && i >= fnType.NumIn()-1 {
+				// Variadic element type
+				expectedType = fnType.In(fnType.NumIn() - 1).Elem()
+			} else if i < fnType.NumIn() {
+				expectedType = fnType.In(i)
+			}
+			if expectedType != nil {
+				argVals[i] = reflect.Zero(expectedType)
+			} else {
+				argVals[i] = reflect.Zero(reflect.TypeOf((*interface{})(nil)).Elem())
+			}
+		} else {
+			argVals[i] = reflect.ValueOf(arg)
+		}
 	}
 
 	// Call the function
@@ -351,6 +369,8 @@ func (r *Resolver) ApplyOperator(op string, left, right interface{}) (interface{
 		return r.ApplyGreaterThanOperator(left, right)
 	case ">=":
 		return r.ApplyGreaterEqualOperator(left, right)
+	case "in":
+		return r.ApplyInOperator(left, right)
 	default:
 		return nil, fmt.Errorf("unknown operator: %s", op)
 	}
@@ -433,6 +453,18 @@ func (r *Resolver) ApplyDivideOperator(left, right interface{}) (interface{}, er
 
 // ApplyEqualOperator applies the == operator.
 func (r *Resolver) ApplyEqualOperator(left, right interface{}) (interface{}, error) {
+	// Try numeric comparison first to handle int/int64/float64 cross-type equality.
+	leftNum, leftErr := r.ToNumber(left)
+	rightNum, rightErr := r.ToNumber(right)
+	if leftErr == nil && rightErr == nil {
+		return leftNum == rightNum, nil
+	}
+	// Fall back to string comparison for non-numeric types.
+	leftStr, leftStrErr := r.ToString(left)
+	rightStr, rightStrErr := r.ToString(right)
+	if leftStrErr == nil && rightStrErr == nil {
+		return leftStr == rightStr, nil
+	}
 	return reflect.DeepEqual(left, right), nil
 }
 
@@ -491,6 +523,24 @@ func (r *Resolver) ApplyGreaterEqualOperator(left, right interface{}) (interface
 		return nil, err
 	}
 	return leftNum >= rightNum, nil
+}
+
+// ApplyInOperator checks if left is contained in right (slice or string).
+func (r *Resolver) ApplyInOperator(left, right interface{}) (interface{}, error) {
+	leftStr := fmt.Sprintf("%v", left)
+	switch v := right.(type) {
+	case []interface{}:
+		for _, item := range v {
+			if fmt.Sprintf("%v", item) == leftStr {
+				return true, nil
+			}
+		}
+		return false, nil
+	case string:
+		return strings.Contains(v, leftStr), nil
+	default:
+		return false, nil
+	}
 }
 
 // ApplyNotOperator applies the ! operator.
