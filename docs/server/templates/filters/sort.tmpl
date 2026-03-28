@@ -5,10 +5,45 @@
 {% block body %}
 <h1>Sort Filter</h1>
 
-<p>Sorts an array in ascending order.</p>
+<p>Sorts an array in ascending order. All elements are compared as strings.</p>
 
 <h2>Syntax</h2>
 <pre><code>{% raw %}
 {% .array | sort %}
 {% endraw %}</code></pre>
+
+<h2>Examples</h2>
+<pre><code>{% raw %}
+{% assign words = "banana,apple,cherry" | split: "," %}
+{% for w in words | sort %}{{ w }} {% end %}
+{% endraw %}</code></pre>
+<p><strong>Output:</strong> apple banana cherry</p>
+<p>Strings are sorted in ascending lexicographic (alphabetical) order.</p>
+
+<pre><code>{% raw %}
+{% assign nums = "10,9,2,1,20" | split: "," %}
+{% for n in nums | sort %}{{ n }} {% end %}
+{% endraw %}</code></pre>
+<p><strong>Output:</strong> 1 10 2 20 9</p>
+<p>Numbers in a string array are sorted as strings, not numerically. In string order, <code>"10"</code> comes before <code>"2"</code> because <code>"1"</code> &lt; <code>"2"</code> lexicographically.</p>
+
+<pre><code>{% raw %}
+{% assign tags = .article.tags | sort %}
+{% for tag in tags %}<span>{{ tag }}</span>{% end %}
+{% endraw %}</code></pre>
+<p>Sort a variable-length list before rendering it for consistent output.</p>
+
+<h2>Notes</h2>
+<ul>
+  <li>All values are converted to strings before comparison, so sorting is always lexicographic (string order), not numeric.</li>
+  <li>Sort order is ascending (A → Z, 0 → 9 as strings).</li>
+  <li>The original array is not modified; a new sorted array is returned.</li>
+  <li>To sort numerically, convert values to numbers before sorting or handle ordering in your Go data layer.</li>
+</ul>
+
+<h2>See Also</h2>
+<ul>
+  <li><a href="/test/filters/reverse">reverse</a></li>
+  <li><a href="/test/filters/uniq">uniq</a></li>
+</ul>
 {% end %}

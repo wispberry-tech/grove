@@ -5,7 +5,7 @@
 {% block body %}
 <h1>Capitalize Filter</h1>
 
-<p>Converts the first character to uppercase and the rest to lowercase.</p>
+<p>Converts the first character of a string to uppercase. The remaining characters are left unchanged.</p>
 
 <h2>Syntax</h2>
 <pre><code>{% raw %}
@@ -14,14 +14,28 @@
 
 <h2>Examples</h2>
 <pre><code>{% raw %}
-{% "hello" | capitalize %}
+{% "hello world" | capitalize %}
 {% endraw %}</code></pre>
-<p><strong>Output:</strong> Hello</p>
+<p><strong>Output:</strong> Hello world</p>
 
 <pre><code>{% raw %}
-{% "HELLO" | capitalize %}
+{% "already Capitalized" | capitalize %}
 {% endraw %}</code></pre>
-<p><strong>Output:</strong> Hello</p>
+<p><strong>Output:</strong> Already Capitalized</p>
+<p>If the first character is already uppercase, the string is returned unchanged.</p>
+
+<pre><code>{% raw %}
+{% "ALL CAPS INPUT" | capitalize %}
+{% endraw %}</code></pre>
+<p><strong>Output:</strong> ALL CAPS INPUT</p>
+<p>Only the first character is affected — the rest of the string is not lowercased. To ensure a fully normalized result, chain with <code>downcase</code> first: <code>| downcase | capitalize</code>.</p>
+
+<h2>Notes</h2>
+<ul>
+  <li>Only the first byte is uppercased; the remaining characters are untouched.</li>
+  <li>Unlike some implementations, <code>capitalize</code> does <strong>not</strong> lowercase the rest of the string.</li>
+  <li>To capitalize with the rest lowercased, use <code>| downcase | capitalize</code>.</li>
+</ul>
 
 <h2>See Also</h2>
 <ul>

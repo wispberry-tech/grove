@@ -5,18 +5,18 @@
 {% block body %}
 <h1>Strip Filter</h1>
 
-<p>Removes leading and/or trailing whitespace.</p>
+<p>Removes leading and trailing whitespace from a string. Whitespace includes spaces, tabs, newlines, and carriage returns.</p>
 
 <h2>Syntax</h2>
 <pre><code>{% raw %}
 {% "  hello  " | strip %}
 {% endraw %}</code></pre>
 
-<h2>Filters</h2>
+<h2>Related Filters</h2>
 <ul>
-  <li><strong>strip</strong> - Remove whitespace from both ends</li>
-  <li><strong>lstrip</strong> - Remove whitespace from the left</li>
-  <li><strong>rstrip</strong> - Remove whitespace from the right</li>
+  <li><strong>strip</strong> — Remove whitespace from both ends</li>
+  <li><a href="/test/filters/lstrip"><strong>lstrip</strong></a> — Remove whitespace from the left (leading) end only</li>
+  <li><a href="/test/filters/rstrip"><strong>rstrip</strong></a> — Remove whitespace from the right (trailing) end only</li>
 </ul>
 
 <h2>Examples</h2>
@@ -24,4 +24,30 @@
 {% "  hello  " | strip %}
 {% endraw %}</code></pre>
 <p><strong>Output:</strong> hello</p>
+<p>Spaces on both sides are removed.</p>
+
+<pre><code>{% raw %}
+{% "\t  indented line\n" | strip %}
+{% endraw %}</code></pre>
+<p><strong>Output:</strong> indented line</p>
+<p>Tabs (<code>\t</code>) and newlines (<code>\n</code>) are also stripped, not just spaces.</p>
+
+<pre><code>{% raw %}
+{% "  leading only" | lstrip %}
+{% endraw %}</code></pre>
+<p><strong>Output:</strong> leading only</p>
+<p>Use <code>lstrip</code> to strip only the left side, preserving trailing whitespace. Use <code>rstrip</code> for the right side only.</p>
+
+<h2>Notes</h2>
+<ul>
+  <li><code>strip</code> removes all leading and trailing Unicode whitespace: spaces (<code> </code>), horizontal tabs (<code>\t</code>), newlines (<code>\n</code>), and carriage returns (<code>\r</code>).</li>
+  <li>Whitespace in the middle of the string is never affected.</li>
+  <li>Use <code>lstrip</code> or <code>rstrip</code> when you only want to trim one side.</li>
+</ul>
+
+<h2>See Also</h2>
+<ul>
+  <li><a href="/test/filters/lstrip">lstrip</a></li>
+  <li><a href="/test/filters/rstrip">rstrip</a></li>
+</ul>
 {% end %}

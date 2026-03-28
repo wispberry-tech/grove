@@ -5,7 +5,7 @@
 {% block body %}
 <h1>Downcase Filter</h1>
 
-<p>Converts all characters to lowercase.</p>
+<p>Converts all characters in a string to lowercase.</p>
 
 <h2>Syntax</h2>
 <pre><code>{% raw %}
@@ -17,6 +17,23 @@
 {% "HELLO" | downcase %}
 {% endraw %}</code></pre>
 <p><strong>Output:</strong> hello</p>
+
+<pre><code>{% raw %}
+{% "Mixed Case String" | downcase %}
+{% endraw %}</code></pre>
+<p><strong>Output:</strong> mixed case string</p>
+
+<pre><code>{% raw %}
+{% .title | downcase | truncate: 20 %}
+{% endraw %}</code></pre>
+<p><strong>Output:</strong> the lowercased title, truncated to 20 characters</p>
+<p>Filters can be chained — <code>downcase</code> runs first, then <code>truncate</code> operates on the result.</p>
+
+<h2>Notes</h2>
+<ul>
+  <li>Numbers and symbols in the string are passed through unchanged.</li>
+  <li>Combine with <code>capitalize</code> to normalize a string: <code>| downcase | capitalize</code>.</li>
+</ul>
 
 <h2>See Also</h2>
 <ul>

@@ -7,43 +7,122 @@
 
 <p>Guidelines for writing secure, performant, and maintainable Wisp templates.</p>
 
-<h2>Security</h2>
+<h2>Composition Choices</h2>
 
-<h3>Auto-Escaping</h3>
-<p>HTML auto-escaping is enabled by default. Keep it ON for HTML output.</p>
+<p>Wisp provides four mechanisms for template composition. Choosing the right one matters for correctness and maintainability.</p>
 
-<h3>Use raw Filter Only for Trusted Content</h3>
+<h3>render — Sandboxed Sub-Templates</h3>
+<p>Use <code>render</code> when including a reusable partial that should not read or modify the caller's variables. The sub-template runs in a completely isolated scope.</p>
 <pre><code>{% raw %}
-{% .trusted_content %}
-{% .user_input %}
+{% render "partials/card", item: .product %}
+{% endraw %}</code></pre>
+<p>The <code>partials/card</code> template only sees the <code>item</code> variable — nothing from the parent scope leaks in. This is the safest choice for components that may be reused across different pages.</p>
+
+<h3>include — Shared Scope Helper</h3>
+<p>Use <code>include</code> when the partial genuinely needs access to the current scope — for example, a shared navigation snippet that reads <code>.current_user</code>.</p>
+<pre><code>{% raw %}
+{% include "partials/nav" %}
+{% endraw %}</code></pre>
+<p>Variables set inside an included template are visible to the parent after inclusion. This makes <code>include</code> less predictable than <code>render</code> — prefer <code>render</code> when in doubt.</p>
+
+<h3>component — Explicit Props</h3>
+<p>Use <code>component</code> when you want the interface of a partial to be explicit and self-documenting. Props are passed by name, making it clear what data the component depends on.</p>
+<pre><code>{% raw %}
+{% component "ui/button", label: "Submit", variant: "primary" %}
+{% endraw %}</code></pre>
+<p>Components are the most predictable composition mechanism and work well for UI primitives with well-defined inputs.</p>
+
+<h3>extends / block — Layout Inheritance</h3>
+<p>Use <code>extends</code> and <code>block</code> for page-level layout inheritance, not for component reuse. A page template extends a layout and fills in named content regions.</p>
+<pre><code>{% raw %}
+{% extends "layouts/base" %}
+{% block title %}My Page{% end %}
+{% block body %}
+  <p>Page content here.</p>
+{% end %}
+{% endraw %}</code></pre>
+<p>Layout inheritance is a one-level relationship — a page extends a layout. Do not chain extends for component reuse; use <code>render</code> or <code>component</code> for that.</p>
+
+<h2>Scope Hygiene</h2>
+
+<h3>Prefer let Over assign for Loop-Local Variables</h3>
+<p>Use <code>let</code> when a variable is only needed inside a block. Unlike <code>assign</code>, <code>let</code>-bound variables do not persist after the block ends.</p>
+<pre><code>{% raw %}
+{% for item in .items %}
+  {% let label = item.name | upcase %}
+  <li>{{ label }}</li>
+{% end %}
+{# label is not accessible here #}
 {% endraw %}</code></pre>
 
-<h3>Resource Limits</h3>
-<pre><code>e.SetMaxIterations(10000)</code></pre>
+<h3>Use render to Prevent Variable Leakage</h3>
+<p>If a sub-template sets variables you do not want visible in the parent, use <code>render</code> instead of <code>include</code>. Because <code>render</code> creates an isolated scope, any <code>assign</code> calls inside it have no effect on the caller.</p>
+
+<h3>Use capture to Build Strings Cleanly</h3>
+<p>When you need to build up a string from multiple expressions, use <code>capture</code> to collect the output into a single variable. This avoids polluting the scope with multiple intermediate variables.</p>
+<pre><code>{% raw %}
+{% capture full_name %}{{ .user.first }} {{ .user.last }}{% end %}
+<p>Welcome, {{ full_name }}!</p>
+{% endraw %}</code></pre>
 
 <h2>Performance</h2>
 
+<h3>Parsed Templates Are Cached</h3>
+<p>The Wisp engine caches parsed ASTs by template name after the first render. There is no performance penalty for using <code>include</code> or <code>render</code> in frequently executed templates — the parse cost is paid only once.</p>
+
+<h3>Prefer Flat Composition Over Deep include Chains</h3>
+<p>Deeply nested chains of <code>include</code> calls (A includes B includes C includes D) are harder to reason about and can cause unexpected scope interactions. For page layouts, use <code>extends</code>/<code>block</code> instead. For reusable components, use <code>render</code> with explicit variables.</p>
+
+<h3>Prefer Filters Over capture + String Manipulation</h3>
+<p>Built-in filters are implemented in Go and are faster than equivalent logic written in templates. Where possible, use filters directly:</p>
+<pre><code>{% raw %}
+{# Prefer this: #}
+{{ .title | downcase | truncate: 60 }}
+
+{# Over this: #}
+{% capture short_title %}{{ .title | downcase }}{% end %}
+{% if short_title | size > 60 %}...{% end %}
+{% endraw %}</code></pre>
+
 <h3>Reuse Engine Instances</h3>
+<p>Create the engine once and reuse it across requests. The engine holds the filter registry and the template cache.</p>
 <pre><code>var e = engine.New()</code></pre>
 
-<h2>Template Organization</h2>
-<pre><code>
-  templates/
-  ├── layouts/
-  ├── partials/
-  └── pages/
-</code></pre>
+<h2>Security</h2>
 
-<h2>Common Patterns</h2>
+<h3>HTML Auto-Escaping Is On by Default</h3>
+<p>All template output is HTML-escaped unless the value is a <code>SafeString</code>. Keep auto-escaping enabled for any HTML context. Calling <code>engine.NewUnsafe()</code> disables global escaping — only do this for non-HTML output formats (e.g., plain text, JSON).</p>
 
-<h3>Default Values</h3>
+<h3>Never Use raw on User-Provided Content</h3>
+<p>The <code>raw</code> filter marks a value as trusted HTML, bypassing auto-escaping. Applying it to user-controlled input creates a cross-site scripting (XSS) vulnerability.</p>
 <pre><code>{% raw %}
-{% .user.name %}
+{# SAFE — trusted HTML from your own code: #}
+{{ .rendered_markdown | raw }}
+
+{# DANGEROUS — never do this: #}
+{{ .user_comment | raw }}
 {% endraw %}</code></pre>
+
+<h3>Use render for User-Controlled Template Names</h3>
+<p>If you allow users to choose which partial to include, always use <code>render</code> (not <code>include</code>). The isolated scope of <code>render</code> prevents the sub-template from reading or overwriting sensitive variables in the parent context.</p>
+
+<h3>Understand escape vs escape_once</h3>
+<p>Use <a href="/test/filters/escape_once">escape_once</a> when content may already contain HTML entities (e.g., from a database or external API). It avoids double-encoding <code>&amp;amp;</code> into <code>&amp;amp;amp;</code>. Use <a href="/test/filters/escape">escape</a> when you need unconditional escaping regardless of the current state of the string.</p>
+
+<h2>Template Organization</h2>
+<pre><code>templates/
+├── layouts/      # Base layouts for extends/block
+├── partials/     # Shared snippets for include/render
+├── components/   # UI components for component tag
+└── pages/        # Top-level page templates
+</code></pre>
 
 <h2>See Also</h2>
 <ul>
-  <li><a href="/docs/getting-started">Getting Started</a></li>
   <li><a href="/docs/security">Security</a></li>
+  <li><a href="/docs/templates/tags/render">render tag</a></li>
+  <li><a href="/docs/templates/tags/include">include tag</a></li>
+  <li><a href="/docs/templates/tags/extends">extends tag</a></li>
+  <li><a href="/docs/templates/tags/component">component tag</a></li>
 </ul>
 {% end %}
