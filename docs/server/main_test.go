@@ -61,6 +61,33 @@ func TestDocPagesRenderWithoutErrors(t *testing.T) {
 		"/filters/remove",
 		"/filters/sort",
 		"/filters/plus",
+		// new filter pages
+		"/filters/prepend",
+		"/filters/lstrip",
+		"/filters/rstrip",
+		"/filters/abs",
+		"/filters/ceil",
+		"/filters/floor",
+		"/filters/round",
+		"/filters/minus",
+		"/filters/times",
+		"/filters/divided_by",
+		"/filters/modulo",
+		"/filters/reverse",
+		"/filters/uniq",
+		"/filters/map_field",
+		"/filters/json",
+		"/filters/raw",
+		"/filters/escape_once",
+		"/filters/date",
+		"/filters/date_format",
+		"/filters/url_encode",
+		"/filters/url_decode",
+		"/filters/min",
+		"/filters/max",
+		// index pages
+		"/tags/index",
+		"/filters/index",
 	}
 
 	for _, page := range pages {

@@ -35,6 +35,6 @@
 <ul>
   <li><code>default</code> triggers on <code>nil</code> and empty string (<code>""</code>) only.</li>
   <li><code>false</code> and <code>0</code> are <strong>not</strong> considered empty — they pass through unchanged.</li>
-  <li>Use <code>default</code> to guard against missing template variables rather than writing <code>{% if %}</code> blocks.</li>
+  <li>Use <code>default</code> to guard against missing template variables rather than writing <code>{% raw %}{% if %}{% endraw %}</code> blocks.</li>
 </ul>
 {% end %}
