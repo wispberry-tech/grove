@@ -5,7 +5,7 @@
 //
 // Usage:
 //
-//	go run ./examples/server
+//	go run ./docs/server/main.go
 //
 // Then open http://localhost:8080 in your browser.
 package main
