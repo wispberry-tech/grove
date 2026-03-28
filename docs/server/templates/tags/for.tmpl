@@ -8,8 +8,10 @@
 <p>The for tag iterates over arrays, slices, maps, or ranges.</p>
 
 <h2>Syntax</h2>
-<pre><code>{% for .item in .items %}...{% end %}
-{% for .index, .item in .items %}...{% end %}</code></pre>
+<pre><code>{% raw %}
+{% for .item in .items %}...{% end %}
+{% for .index, .item in .items %}...{% end %}
+{% endraw %}</code></pre>
 
 <h2>Description</h2>
 <p>Creates a loop that iterates over each element in an array, slice, map, or range expression.</p>
@@ -24,37 +26,47 @@
 <h2>Examples</h2>
 
 <h3>Basic Array Iteration</h3>
-<pre><code>{% for .item in .items %}
+<pre><code>{% raw %}
+{% for .item in .items %}
 {%.item%}
-{% end %}</code></pre>
+{% end %}
+{% endraw %}</code></pre>
 <p><strong>Input:</strong> <code>{"items": ["apple", "banana", "cherry"]}</code></p>
 <p><strong>Output:</strong> apple banana cherry</p>
 
 <h3>With Index</h3>
-<pre><code>{% for .index, .item in .items %}
+<pre><code>{% raw %}
+{% for .index, .item in .items %}
 {%.index%}: {%.item%}
-{% end %}</code></pre>
+{% end %}
+{% endraw %}</code></pre>
 <p><strong>Input:</strong> <code>{"items": ["a", "b", "c"]}</code></p>
 <p><strong>Output:</strong> 0: a 1: b 2: c</p>
 
 <h3>Map Iteration</h3>
-<pre><code>{% for .key, .value in .user %}
+<pre><code>{% raw %}
+{% for .key, .value in .user %}
 {%.key%}: {%.value%}
-{% end %}</code></pre>
+{% end %}
+{% endraw %}</code></pre>
 <p><strong>Input:</strong> <code>{"user": {"name": "Alice", "email": "alice@example.com"}}</code></p>
 
 <h3>Range Loop</h3>
-<pre><code>{% for .i in (range 1 5) %}
+<pre><code>{% raw %}
+{% for .i in (range 1 5) %}
 {%.i%}
-{% end %}</code></pre>
+{% end %}
+{% endraw %}</code></pre>
 <p><strong>Output:</strong> 1 2 3 4 5</p>
 
 <h3>Empty Array with else</h3>
-<pre><code>{% for .item in .items %}
+<pre><code>{% raw %}
+{% for .item in .items %}
 {%.item%}
 {% else %}
 No items found
-{% end %}</code></pre>
+{% end %}
+{% endraw %}</code></pre>
 
 <h2>Notes</h2>
 <ul>

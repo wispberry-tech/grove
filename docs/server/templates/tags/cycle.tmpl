@@ -8,12 +8,16 @@
 <p>Cycles through a list of values.</p>
 
 <h2>Syntax</h2>
-<pre><code>{% cycle "value1", "value2", "value3" %}</code></pre>
+<pre><code>{% raw %}
+{% cycle "value1", "value2", "value3" %}
+{% endraw %}</code></pre>
 
 <h2>Examples</h2>
-<pre><code>{% for .item in .items %}
+<pre><code>{% raw %}
+{% for .item in .items %}
 &lt;li class="{% cycle "odd", "even" %}"&gt;{%.item%}&lt;/li&gt;
-{% end %}</code></pre>
+{% end %}
+{% endraw %}</code></pre>
 
 <h2>Notes</h2>
 <ul>

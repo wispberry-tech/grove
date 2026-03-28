@@ -23,7 +23,9 @@ e.SetAutoEscape(false)  // For JSON, plain text</code></pre>
 
 <h2>SafeString</h2>
 <p>Mark content as trusted:</p>
-<pre><code>{%.trusted_html | raw %}</code></pre>
+<pre><code>{% raw %}
+{%.trusted_html | raw %}
+{% endraw %}</code></pre>
 
 <p><strong>Warning:</strong> Only use raw for content you control, never for user input.</p>
 

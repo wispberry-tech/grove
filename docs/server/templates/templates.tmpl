@@ -15,13 +15,19 @@
 </table>
 
 <h2>Include</h2>
-<pre><code>{% include "partials/header" %}</code></pre>
+<pre><code>{% raw %}
+{% include "partials/header" %}
+{% endraw %}</code></pre>
 
 <h2>Render</h2>
-<pre><code>{% render "widget" .data %}</code></pre>
+<pre><code>{% raw %}
+{% render "widget" .data %}
+{% endraw %}</code></pre>
 
 <h2>Component</h2>
-<pre><code>{% component "Button", label: "Click" %}</code></pre>
+<pre><code>{% raw %}
+{% component "Button" label="Click" %}
+{% endraw %}</code></pre>
 
 <h2>See Also</h2>
 <ul>

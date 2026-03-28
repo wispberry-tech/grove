@@ -8,7 +8,9 @@
 <p>Renders a reusable UI component with properties.</p>
 
 <h2>Syntax</h2>
-<pre><code>{% component "path/to/component", prop: "value" %}</code></pre>
+<pre><code>{% raw %}
+{% component "path/to/component" prop="value" %}
+{% endraw %}</code></pre>
 
 <h2>Description</h2>
 <p>Renders a template file as a reusable component with props.</p>
@@ -16,7 +18,9 @@
 <h2>Examples</h2>
 
 <h3>Basic Component</h3>
-<pre><code>{% component "button", text: "Click Me", type: "primary" %}</code></pre>
+<pre><code>{% raw %}
+{% component "button" text="Click Me" type="primary" %}
+{% endraw %}</code></pre>
 
 <h2>Notes</h2>
 <ul>

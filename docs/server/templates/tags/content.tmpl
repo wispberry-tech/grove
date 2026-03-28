@@ -8,9 +8,11 @@
 <p>Alternative syntax for defining content for parent template blocks.</p>
 
 <h2>Syntax</h2>
-<pre><code>{% content block_name %}
+<pre><code>{% raw %}
+{% content block_name %}
     Content for the block
-{% endcontent %}</code></pre>
+{% endcontent %}
+{% endraw %}</code></pre>
 
 <h2>Description</h2>
 <p>Alternative to block tag for providing content to parent template blocks.</p>
@@ -18,9 +20,11 @@
 <h2>Examples</h2>
 
 <h3>Basic Content</h3>
-<pre><code>{% extends "parent" %}
+<pre><code>{% raw %}
+{% extends "parent" %}
 {% content title %}My Title{% endcontent %}
-{% content body %}Content here{% endcontent %}</code></pre>
+{% content body %}Content here{% endcontent %}
+{% endraw %}</code></pre>
 
 <h2>Notes</h2>
 <ul>

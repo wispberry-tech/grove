@@ -8,7 +8,9 @@
 <p>Template inheritance through extends, block, and content tags.</p>
 
 <h2>Syntax</h2>
-<pre><code>{% extends "path/to/layout" %}</code></pre>
+<pre><code>{% raw %}
+{% extends "path/to/layout" %}
+{% endraw %}</code></pre>
 
 <h2>Description</h2>
 <p>Specifies which parent template to inherit from. Must be the first tag in the template.</p>
@@ -16,11 +18,13 @@
 <h2>Examples</h2>
 
 <h3>Basic Inheritance</h3>
-<pre><code>{% extends "test/layouts/base" %}
+<pre><code>{% raw %}
+{% extends "test/layouts/base" %}
 {% block title %}My Page{% end %}
 {% block content %}
   &lt;p&gt;My Content&lt;/p&gt;
-{% end %}</code></pre>
+{% end %}
+{% endraw %}</code></pre>
 
 <h2>Notes</h2>
 <ul>

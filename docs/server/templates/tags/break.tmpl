@@ -8,15 +8,19 @@
 <p>Exits a loop early.</p>
 
 <h2>Syntax</h2>
-<pre><code>{% break %}</code></pre>
+<pre><code>{% raw %}
+{% break %}
+{% endraw %}</code></pre>
 
 <h2>Examples</h2>
-<pre><code>{% for .item in .items %}
+<pre><code>{% raw %}
+{% for .item in .items %}
 {% if .item.stop %}
   {% break %}
 {% end %}
 {%.item.name%}
-{% end %}</code></pre>
+{% end %}
+{% endraw %}</code></pre>
 
 <h2>See Also</h2>
 <ul>

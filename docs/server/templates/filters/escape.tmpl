@@ -8,5 +8,7 @@
 <p>Converts HTML special characters to entities.</p>
 
 <h2>Syntax</h2>
-<pre><code>{% "<script>" | escape %}</code></pre>
+<pre><code>{% raw %}
+{% "<script>" | escape %}
+{% endraw %}</code></pre>
 {% end %}

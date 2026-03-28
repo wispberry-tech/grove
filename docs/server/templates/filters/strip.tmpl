@@ -8,7 +8,9 @@
 <p>Removes leading and/or trailing whitespace.</p>
 
 <h2>Syntax</h2>
-<pre><code>{% "  hello  " | strip %}</code></pre>
+<pre><code>{% raw %}
+{% "  hello  " | strip %}
+{% endraw %}</code></pre>
 
 <h2>Filters</h2>
 <ul>
@@ -18,6 +20,8 @@
 </ul>
 
 <h2>Examples</h2>
-<pre><code>{% "  hello  " | strip %}</code></pre>
+<pre><code>{% raw %}
+{% "  hello  " | strip %}
+{% endraw %}</code></pre>
 <p><strong>Output:</strong> hello</p>
 {% end %}

@@ -8,14 +8,18 @@
 <p>Creates or updates variables in the template context.</p>
 
 <h2>Syntax</h2>
-<pre><code>{% assign variable = value %}
-{% assign variable = expression %}</code></pre>
+<pre><code>{% raw %}
+{% assign .variable = value %}
+{% assign .variable = expression %}
+{% endraw %}</code></pre>
 
 <h2>Examples</h2>
-<pre><code>{% assign name = "World" %}
-Hello, {{name}}!
+<pre><code>{% raw %}
+{% assign .name = "World" %}
+Hello, {%.name%}!
 
-{% assign total = 10 + 5 %}</code></pre>
+{% assign .total = 10 + 5 %}
+{% endraw %}</code></pre>
 
 <h2>Notes</h2>
 <ul>

@@ -8,12 +8,16 @@
 <p>Decrements a counter variable and returns its value.</p>
 
 <h2>Syntax</h2>
-<pre><code>{% decrement variable %}</code></pre>
+<pre><code>{% raw %}
+{% decrement variable %}
+{% endraw %}</code></pre>
 
 <h2>Examples</h2>
-<pre><code>{% decrement counter %}
+<pre><code>{% raw %}
 {% decrement counter %}
-{% decrement counter %}</code></pre>
+{% decrement counter %}
+{% decrement counter %}
+{% endraw %}</code></pre>
 <p><strong>Output:</strong> -1 -2 -3</p>
 
 <h2>Notes</h2>

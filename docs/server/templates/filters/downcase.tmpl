@@ -8,10 +8,14 @@
 <p>Converts all characters to lowercase.</p>
 
 <h2>Syntax</h2>
-<pre><code>{% "string" | downcase %}</code></pre>
+<pre><code>{% raw %}
+{% "string" | downcase %}
+{% endraw %}</code></pre>
 
 <h2>Examples</h2>
-<pre><code>{% "HELLO" | downcase %}</code></pre>
+<pre><code>{% raw %}
+{% "HELLO" | downcase %}
+{% endraw %}</code></pre>
 <p><strong>Output:</strong> hello</p>
 
 <h2>See Also</h2>

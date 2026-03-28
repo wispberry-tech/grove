@@ -8,13 +8,17 @@
 <p>Captures output into a variable.</p>
 
 <h2>Syntax</h2>
-<pre><code>{% capture variable %}...{% endcapture %}</code></pre>
+<pre><code>{% raw %}
+{% capture variable %}...{% endcapture %}
+{% endraw %}</code></pre>
 
 <h2>Examples</h2>
-<pre><code>{% capture greeting %}
-  Hello, {{name}}!
+<pre><code>{% raw %}
+{% capture greeting %}
+  Hello, {%.name%}!
 {% endcapture %}
-{{greeting}}</code></pre>
+{%.greeting%}
+{% endraw %}</code></pre>
 
 <h2>See Also</h2>
 <ul>

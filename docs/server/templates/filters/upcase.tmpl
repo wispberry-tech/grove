@@ -8,10 +8,14 @@
 <p>Converts all characters to uppercase.</p>
 
 <h2>Syntax</h2>
-<pre><code>{% "string" | upcase %}</code></pre>
+<pre><code>{% raw %}
+{% "string" | upcase %}
+{% endraw %}</code></pre>
 
 <h2>Examples</h2>
-<pre><code>{% "hello" | upcase %}</code></pre>
+<pre><code>{% raw %}
+{% "hello" | upcase %}
+{% endraw %}</code></pre>
 <p><strong>Output:</strong> HELLO</p>
 
 <h2>See Also</h2>

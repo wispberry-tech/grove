@@ -8,9 +8,13 @@
 <p>Replaces occurrences of a substring.</p>
 
 <h2>Syntax</h2>
-<pre><code>{% "string" | replace: "old", "new" %}</code></pre>
+<pre><code>{% raw %}
+{% "string" | replace "old" "new" %}
+{% endraw %}</code></pre>
 
 <h2>Examples</h2>
-<pre><code>{% "Hello World" | replace: "World", "Universe" %}</code></pre>
+<pre><code>{% raw %}
+{% "Hello World" | replace "World" "Universe" %}
+{% endraw %}</code></pre>
 <p><strong>Output:</strong> Hello Universe</p>
 {% end %}

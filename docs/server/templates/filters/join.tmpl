@@ -8,5 +8,7 @@
 <p>Combine array elements into a string.</p>
 
 <h2>Syntax</h2>
-<pre><code>{% array | join: "separator" %}</code></pre>
+<pre><code>{% raw %}
+{% .array | join "separator" %}
+{% endraw %}</code></pre>
 {% end %}

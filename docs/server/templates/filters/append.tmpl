@@ -8,9 +8,13 @@
 <p>Adds content to the end of a string.</p>
 
 <h2>Syntax</h2>
-<pre><code>{% "string" | append: "suffix" %}</code></pre>
+<pre><code>{% raw %}
+{% "string" | append "suffix" %}
+{% endraw %}</code></pre>
 
 <h2>Examples</h2>
-<pre><code>{% "Hello" | append: " World" %}</code></pre>
+<pre><code>{% raw %}
+{% "Hello" | append " World" %}
+{% endraw %}</code></pre>
 <p><strong>Output:</strong> Hello World</p>
 {% end %}

@@ -9,28 +9,35 @@
 
 <h2>Extends</h2>
 <p>Child template inherits from parent layout:</p>
-<pre><code>{% extends "layouts/base" %}
+<pre><code>{% raw %}
+{% extends "layouts/base" %}
 
 {% block content %}
     Page content
-{% end %}</code></pre>
+{% end %}
+{% endraw %}</code></pre>
 
 <h2>Block</h2>
 <p>Parent defines replaceable sections:</p>
-<pre><code>{% block title %}Default Title{% end %}
+<pre><code>{% raw %}
+{% block title %}Default Title{% end %}
 
 {% block content %}
     Default content
-{% end %}</code></pre>
+{% end %}
+{% endraw %}</code></pre>
 
 <h2>Content</h2>
 <p>Alternative syntax for providing block content:</p>
-<pre><code>{% content title %}About Page{% endcontent %}
-{% content body %}Content here{% endcontent %}</code></pre>
+<pre><code>{% raw %}
+{% content title %}About Page{% endcontent %}
+{% content body %}Content here{% endcontent %}
+{% endraw %}</code></pre>
 
 <h2>Nested Layouts</h2>
 <p>Create multi-level inheritance:</p>
-<pre><code>{# layouts/base.html #}
+<pre><code>{% raw %}
+{# layouts/base.html #}
 {% block body %}{% end %}
 
 {# layouts/page.html #}
@@ -39,7 +46,8 @@
 
 {# pages/about.html #}
 {% extends "layouts/page" %}
-{% block content %}About content{% end %}</code></pre>
+{% block content %}About content{% end %}
+{% endraw %}</code></pre>
 
 <h2>Best Practices</h2>
 <ul>

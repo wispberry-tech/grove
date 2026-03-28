@@ -8,15 +8,19 @@
 <p>Creates a scoped context for accessing nested data.</p>
 
 <h2>Syntax</h2>
-<pre><code>{% with expression as variable %}
+<pre><code>{% raw %}
+{% with expression as variable %}
   Content
-{% end %}</code></pre>
+{% end %}
+{% endraw %}</code></pre>
 
 <h2>Examples</h2>
-<pre><code>{% with user as u %}
-{{u.name}}
-{{u.email}}
-{% end %}</code></pre>
+<pre><code>{% raw %}
+{% with .user as .u %}
+{%.u.name%}
+{%.u.email%}
+{% end %}
+{% endraw %}</code></pre>
 
 <h2>Notes</h2>
 <ul>

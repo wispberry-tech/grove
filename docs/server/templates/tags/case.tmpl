@@ -8,18 +8,22 @@
 <p>Multi-way conditionals, similar to switch statements.</p>
 
 <h2>Syntax</h2>
-<pre><code>{% case variable %}
+<pre><code>{% raw %}
+{% case variable %}
   {% when "value1" %}Result 1
   {% when "value2" %}Result 2
   {% else %}Default Result
-{% end %}</code></pre>
+{% end %}
+{% endraw %}</code></pre>
 
 <h2>Examples</h2>
-<pre><code>{% case .status %}
+<pre><code>{% raw %}
+{% case .status %}
   {% when "active" %}Active
   {% when "inactive" %}Inactive
   {% else %}Unknown
-{% end %}</code></pre>
+{% end %}
+{% endraw %}</code></pre>
 
 <h2>Notes</h2>
 <ul>

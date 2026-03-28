@@ -8,16 +8,20 @@
 <p>Loops while a condition is true.</p>
 
 <h2>Syntax</h2>
-<pre><code>{% while condition %}
+<pre><code>{% raw %}
+{% while condition %}
   Content
-{% end %}</code></pre>
+{% end %}
+{% endraw %}</code></pre>
 
 <h2>Examples</h2>
-<pre><code>{% assign i = 0 %}
-{% while i < 3 %}
-{{i}}
-{% assign i = i | plus: 1 %}
-{% end %}</code></pre>
+<pre><code>{% raw %}
+{% assign .i = 0 %}
+{% while .i < 3 %}
+{%.i%}
+{% assign .i = .i | plus 1 %}
+{% end %}
+{% endraw %}</code></pre>
 
 <h2>Notes</h2>
 <ul>

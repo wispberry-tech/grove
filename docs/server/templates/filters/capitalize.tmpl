@@ -8,13 +8,19 @@
 <p>Converts the first character to uppercase and the rest to lowercase.</p>
 
 <h2>Syntax</h2>
-<pre><code>{% "string" | capitalize %}</code></pre>
+<pre><code>{% raw %}
+{% "string" | capitalize %}
+{% endraw %}</code></pre>
 
 <h2>Examples</h2>
-<pre><code>{% "hello" | capitalize %}</code></pre>
+<pre><code>{% raw %}
+{% "hello" | capitalize %}
+{% endraw %}</code></pre>
 <p><strong>Output:</strong> Hello</p>
 
-<pre><code>{% "HELLO" | capitalize %}</code></pre>
+<pre><code>{% raw %}
+{% "HELLO" | capitalize %}
+{% endraw %}</code></pre>
 <p><strong>Output:</strong> Hello</p>
 
 <h2>See Also</h2>

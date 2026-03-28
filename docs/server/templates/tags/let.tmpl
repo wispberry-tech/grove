@@ -8,7 +8,9 @@
 <p>Creates a scoped variable that only exists within its block.</p>
 
 <h2>Syntax</h2>
-<pre><code>{% let variable = value %}...{% endlet %}</code></pre>
+<pre><code>{% raw %}
+{% let variable = value %}...{% endlet %}
+{% endraw %}</code></pre>
 
 <h2>Notes</h2>
 <ul>

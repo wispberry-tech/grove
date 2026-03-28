@@ -8,13 +8,17 @@
 <p>Generates a sequence of numbers between a start and end value.</p>
 
 <h2>Syntax</h2>
-<pre><code>{% range start end %}
-{% range start end step %}</code></pre>
+<pre><code>{% raw %}
+{% range start end %}
+{% range start end step %}
+{% endraw %}</code></pre>
 
 <h2>Examples</h2>
-<pre><code>{% for i in (range 1 5) %}
-{{i}}
-{% end %}</code></pre>
+<pre><code>{% raw %}
+{% for .i in (range 1 5) %}
+{%.i%}
+{% end %}
+{% endraw %}</code></pre>
 <p><strong>Output:</strong> 1 2 3 4 5</p>
 
 <h2>Notes</h2>

@@ -13,10 +13,10 @@
 <p>HTML auto-escaping is enabled by default. Keep it ON for HTML output.</p>
 
 <h3>Use raw Filter Only for Trusted Content</h3>
-<pre><code>
-  {% .trusted_content %}
-  {% .user_input %}
-</code></pre>
+<pre><code>{% raw %}
+{%.trusted_content %}
+{%.user_input %}
+{% endraw %}</code></pre>
 
 <h3>Resource Limits</h3>
 <pre><code>e.SetMaxIterations(10000)</code></pre>
@@ -24,7 +24,7 @@
 <h2>Performance</h2>
 
 <h3>Reuse Engine Instances</h3>
-<pre><code>var engine = engine.New()</code></pre>
+<pre><code>var e = engine.New()</code></pre>
 
 <h2>Template Organization</h2>
 <pre><code>
@@ -37,9 +37,9 @@
 <h2>Common Patterns</h2>
 
 <h3>Default Values</h3>
-<pre><code>
-  {% .user.name }
-</code></pre>
+<pre><code>{% raw %}
+{%.user.name %}
+{% endraw %}</code></pre>
 
 <h2>See Also</h2>
 <ul>

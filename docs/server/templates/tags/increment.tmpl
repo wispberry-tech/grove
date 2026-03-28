@@ -8,12 +8,16 @@
 <p>Increments a counter variable and returns its value.</p>
 
 <h2>Syntax</h2>
-<pre><code>{% increment variable %}</code></pre>
+<pre><code>{% raw %}
+{% increment variable %}
+{% endraw %}</code></pre>
 
 <h2>Examples</h2>
-<pre><code>{% increment counter %}
+<pre><code>{% raw %}
 {% increment counter %}
-{% increment counter %}</code></pre>
+{% increment counter %}
+{% increment counter %}
+{% endraw %}</code></pre>
 <p><strong>Output:</strong> 0 1 2</p>
 
 <h2>Notes</h2>
