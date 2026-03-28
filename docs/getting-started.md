@@ -12,14 +12,7 @@ Wisp is a secure, high-performance HTML templating engine for Go with a Liquid-i
 ## Installation
 
 ```bash
-go get github.com/anomalyco/wisp
-```
-
-Or add to your project:
-
-```bash
-go mod edit -require=github.com/anomalyco/wisp@latest
-go mod tidy
+go get github.com/wispberry-tech/wisp
 ```
 
 ## Quick Start
@@ -29,7 +22,7 @@ package main
 
 import (
     "fmt"
-    "github.com/anomalyco/wisp/pkg/engine"
+    "github.com/wispberry-tech/wisp/pkg/engine"
 )
 
 func main() {
@@ -334,7 +327,7 @@ e.SetAutoEscape(false)  // Disable for non-HTML output
 Mark content as safe when you trust it (e.g., rendered markdown):
 
 ```go
-import "github.com/anomalyco/wisp/pkg/engine"
+import "github.com/wispberry-tech/wisp/pkg/engine"
 
 safe := engine.SafeString("<b>Bold</b>")
 result, _ := e.RenderString(`{% .content%}`, map[string]interface{}{
