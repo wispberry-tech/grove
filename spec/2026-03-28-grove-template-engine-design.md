@@ -662,7 +662,39 @@ Slot fallback content (between `{% slot %}` and `{% endslot %}`) is rendered whe
 {% endasset %}
 ```
 
-If two components each declare `{% asset src="/js/datepicker.js" %}`, it appears **once** in `result.Assets.Scripts`.
+Assets are deduplicated by `src` + `type`. The deduplication policy is **strict**:
+
+- **Identical duplicates** (same `src`, `type`, and `attrs`) — silently dropped after the first declaration. This is the common case when multiple components depend on the same library.
+- **Conflicting duplicates** (same `src` and `type`, different `attrs`) — `RenderError` at render time, naming both declaration sites and their locations.
+- **Inline assets** (no `src`) — always emitted, never deduplicated. No two inline scripts are considered the same.
+
+```html
+{# Fine — identical declaration, silently dropped #}
+{% asset src="/js/luxon.js" type="script" defer %}
+{% asset src="/js/luxon.js" type="script" defer %}
+
+{# Error — same src, conflicting attrs #}
+{% asset src="/js/luxon.js" type="script" defer %}
+{% asset src="/js/luxon.js" type="script" async %}
+→ RenderError: asset conflict for "/js/luxon.js":
+    first declared at datepicker.html:2 with attrs: defer
+    redeclared at chart.html:1 with attrs: async
+    fix: declare this asset once in your base layout or a shared macro
+```
+
+The fix is always the same: centralize the canonical declaration in a base layout template or a shared macro file.
+
+```html
+{# macros/assets.html — single source of truth #}
+{% macro luxon() %}{% asset src="/js/luxon.js" type="script" defer %}{% endmacro %}
+{% macro htmx() %}{% asset src="/js/htmx.js" type="script" defer %}{% endmacro %}
+
+{# datepicker.html — imports the canonical declaration #}
+{% import "macros/assets.html" as assets %}
+{{ assets.luxon() }}
+```
+
+> **Inline asset deduplication:** Inline `{% asset %}` blocks (no `src`) are always emitted and cannot be deduplicated — there is no stable key to compare against. **Recommended practice:** move component-specific JS/CSS into separate files referenced by `src` so deduplication and future bundling can apply. Inline assets should be reserved for truly one-off, per-render snippets. Bundling support will be addressed in a later development phase.
 
 > **Boolean attribute encoding:** Boolean HTML attributes (`defer`, `async`, `crossorigin`) are stored in `Asset.Attrs` as `map[key]""` (empty string value). `InjectAssets()` serializes empty-string values as standalone attributes (`defer`, not `defer=""`). Non-boolean attributes are emitted as `key="value"`.
 
@@ -2571,7 +2603,7 @@ Grove makes no attempt at Shopify Liquid or Django template compatibility. Teams
 
    The boilerplate cost is real (~10 lines per type, ~40 for a large struct) but the security model is unambiguous: sensitive fields cannot leak by accident, and a full audit of template-visible data is a single `grep GroveResolve`. Reflection-based opt-in (`grove.Reflect()`) was considered and deferred to v1.1 — the allowlist model is the right default for a new engine, and the friction should be validated against real usage before adding an escape hatch.
 
-5. **Asset ordering guarantees** — Assets are currently deduplicated by `Src` in insertion order (first declaration wins). Should later declarations be able to override attributes (e.g., change `defer` to `async`)? This needs a defined policy.
+5. ~~**Asset ordering guarantees**~~ — **Resolved (strict deduplication):** Assets are deduplicated by `src` + `type` in insertion order. Identical duplicates (same `src`, `type`, and `attrs`) are silently dropped. Conflicting duplicates (same `src` and `type`, different `attrs`) are a `RenderError` at render time — the error names both declaration sites. Later declarations cannot override attributes; the correct fix is always to consolidate into a shared macro or base layout. See §3.3 Asset Hoisting for the full policy and examples.
 
 6. ~~**Slot prop passing**~~ — **Resolved (Option C — Render-prop pattern via macros):** Slots remain pure content holes with no data flowing back to the fill block. For components that own their own data and need per-item customization, the solution is to accept a macro as a prop and call it per item.
 
@@ -2608,4 +2640,4 @@ Grove makes no attempt at Shopify Liquid or Django template compatibility. Teams
 
    Scoped slots (Option B) were considered and rejected: the bidirectional scope model requires closures in the VM frame stack at slot boundaries, has a history of subtle bugs in Vue/Svelte, and complicates the mental model for template authors in ways that are hard to document clearly. The render-prop pattern achieves the same expressive power with a single, well-understood primitive (function passing) and no new scoping rules.
 
-7. **Error recovery** — Should the VM attempt to continue rendering after a non-fatal error (e.g., undefined variable in non-strict mode) or always halt? Continuing enables partial renders useful for debugging but can produce malformed HTML.
+7. ~~**Error recovery**~~ — **Resolved:** The VM continues rendering after non-fatal errors (e.g., undefined variable in non-strict mode) and logs the error to the console (`log.Println` or equivalent). This enables partial renders useful for debugging. Fatal errors (e.g., stack overflows, parse failures) still halt immediately. Error handling will be improved in a future iteration.
