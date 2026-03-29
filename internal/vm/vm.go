@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"html"
+	"sort"
 	"strings"
 	"sync"
 
@@ -12,19 +13,45 @@ import (
 	"grove/internal/scope"
 )
 
+// loopState holds per-loop iterator state.
+type loopState struct {
+	items []Value  // iteration items (list elements or map values in key order)
+	keys  []string // sorted map keys (nil for list loops)
+	idx   int      // current index (0-based)
+	isMap bool     // true when iterating a map
+}
+
+// captureFrame holds output redirection state for {% capture %}.
+type captureFrame struct {
+	buf    strings.Builder
+	varIdx int // name index for the capture variable
+}
+
 // VM is a stack-based bytecode executor. Instances are pooled; do not hold references.
 type VM struct {
-	stack [256]Value
-	sp    int
-	eng   EngineIface
-	sc    *scope.Scope
-	out   strings.Builder
+	stack    [256]Value
+	sp       int
+	eng      EngineIface
+	sc       *scope.Scope
+	out      strings.Builder
+	loops    [32]loopState
+	ldepth   int // current loop depth (0 = not in loop)
+	captures [8]captureFrame
+	cdepth   int // current capture depth
 }
 
 var vmPool = sync.Pool{
 	New: func() any {
 		return &VM{}
 	},
+}
+
+// currentWriter returns a pointer to the active output builder.
+func (v *VM) currentWriter() *strings.Builder {
+	if v.cdepth > 0 {
+		return &v.captures[v.cdepth-1].buf
+	}
+	return &v.out
 }
 
 // Execute runs bc with data as the render context and returns the rendered string.
@@ -35,11 +62,15 @@ func Execute(ctx context.Context, bc *compiler.Bytecode, data map[string]any, en
 		v.sp = 0
 		v.sc = nil
 		v.eng = nil
+		v.ldepth = 0
+		v.cdepth = 0
+		for i := range v.captures {
+			v.captures[i].buf.Reset()
+		}
 		vmPool.Put(v)
 	}()
 	v.eng = eng
 
-	// Build three-layer scope: local (empty) → render (data) → global
 	globalSc := scope.New(nil)
 	for k, val := range eng.GlobalData() {
 		globalSc.Set(k, val)
@@ -48,7 +79,7 @@ func Execute(ctx context.Context, bc *compiler.Bytecode, data map[string]any, en
 	for k, val := range data {
 		renderSc.Set(k, val)
 	}
-	v.sc = scope.New(renderSc) // local scope (for set, with, etc. — Plan 2)
+	v.sc = scope.New(renderSc)
 
 	return v.run(ctx, bc)
 }
@@ -57,7 +88,6 @@ func (v *VM) run(ctx context.Context, bc *compiler.Bytecode) (string, error) {
 	ip := 0
 	instrs := bc.Instrs
 	for ip < len(instrs) {
-		// Context cancellation check (also serves as yield point)
 		select {
 		case <-ctx.Done():
 			return "", ctx.Err()
@@ -109,16 +139,16 @@ func (v *VM) run(ctx context.Context, bc *compiler.Bytecode) (string, error) {
 
 		case compiler.OP_OUTPUT:
 			val := v.pop()
+			w := v.currentWriter()
 			if val.typ == TypeSafeHTML {
-				v.out.WriteString(val.sval)
+				w.WriteString(val.sval)
 			} else if val.typ != TypeNil {
-				v.out.WriteString(html.EscapeString(val.String()))
+				w.WriteString(html.EscapeString(val.String()))
 			}
-			// nil outputs nothing
 
 		case compiler.OP_OUTPUT_RAW:
 			val := v.pop()
-			v.out.WriteString(val.String())
+			v.currentWriter().WriteString(val.String())
 
 		case compiler.OP_ADD:
 			b, a := v.pop(), v.pop()
@@ -242,11 +272,171 @@ func (v *VM) run(ctx context.Context, bc *compiler.Bytecode) (string, error) {
 			}
 			v.push(result)
 
+		// ─── Plan 2 opcodes ───────────────────────────────────────────────────
+
+		case compiler.OP_STORE_VAR:
+			val := v.pop()
+			v.sc.Set(bc.Names[instr.A], val)
+
+		case compiler.OP_PUSH_SCOPE:
+			v.sc = scope.New(v.sc)
+
+		case compiler.OP_POP_SCOPE:
+			if parent := v.sc.Parent(); parent != nil {
+				v.sc = parent
+			}
+
+		case compiler.OP_FOR_INIT:
+			coll := v.pop()
+			ls, ok := v.makeLoopState(coll)
+			if !ok || len(ls.items) == 0 {
+				ip = int(instr.A) // jump to fallthrough (empty block or end)
+				break
+			}
+			if v.ldepth >= len(v.loops) {
+				return "", &runtimeErr{msg: "for loop nesting too deep (max 32)"}
+			}
+			v.loops[v.ldepth] = ls
+			v.ldepth++
+
+		case compiler.OP_FOR_BIND_1:
+			ls := &v.loops[v.ldepth-1]
+			varName := bc.Names[instr.A]
+			v.sc.Set(varName, ls.items[ls.idx])
+			v.sc.Set("loop", v.makeLoopMap())
+
+		case compiler.OP_FOR_BIND_KV:
+			ls := &v.loops[v.ldepth-1]
+			name1 := bc.Names[instr.A]
+			name2 := bc.Names[instr.B]
+			if ls.isMap {
+				v.sc.Set(name1, StringVal(ls.keys[ls.idx]))
+				v.sc.Set(name2, ls.items[ls.idx])
+			} else {
+				v.sc.Set(name1, IntVal(int64(ls.idx)))
+				v.sc.Set(name2, ls.items[ls.idx])
+			}
+			v.sc.Set("loop", v.makeLoopMap())
+
+		case compiler.OP_FOR_STEP:
+			ls := &v.loops[v.ldepth-1]
+			ls.idx++
+			if ls.idx < len(ls.items) {
+				ip = int(instr.A) // jump back to loop top
+			} else {
+				v.ldepth-- // pop loop state
+			}
+
+		case compiler.OP_CAPTURE_START:
+			if v.cdepth >= len(v.captures) {
+				return "", &runtimeErr{msg: "capture nesting too deep (max 8)"}
+			}
+			v.captures[v.cdepth].buf.Reset()
+			v.captures[v.cdepth].varIdx = int(instr.A)
+			v.cdepth++
+
+		case compiler.OP_CAPTURE_END:
+			v.cdepth--
+			content := v.captures[v.cdepth].buf.String()
+			varName := bc.Names[v.captures[v.cdepth].varIdx]
+			v.sc.Set(varName, StringVal(content))
+
+		case compiler.OP_CALL_RANGE:
+			argc := int(instr.A)
+			args := make([]int64, argc)
+			for i := argc - 1; i >= 0; i-- {
+				n, _ := v.pop().ToInt64()
+				args[i] = n
+			}
+			v.push(buildRange(args))
+
 		default:
 			return "", fmt.Errorf("vm: unknown opcode %d at ip=%d", instr.Op, ip-1)
 		}
 	}
 	return v.out.String(), nil
+}
+
+// makeLoopState converts a Value into a loopState.
+func (v *VM) makeLoopState(coll Value) (loopState, bool) {
+	switch coll.typ {
+	case TypeList:
+		lst, _ := coll.oval.([]Value)
+		return loopState{items: lst}, true
+	case TypeMap:
+		m, _ := coll.oval.(map[string]any)
+		keys := make([]string, 0, len(m))
+		for k := range m {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		vals := make([]Value, len(keys))
+		for i, k := range keys {
+			vals[i] = FromAny(m[k])
+		}
+		return loopState{items: vals, keys: keys, isMap: true}, true
+	case TypeNil:
+		return loopState{}, false
+	}
+	return loopState{}, false
+}
+
+// makeLoopMap constructs the `loop` magic variable for the current iteration.
+func (v *VM) makeLoopMap() Value {
+	ls := &v.loops[v.ldepth-1]
+	n := len(ls.items)
+	loopData := map[string]any{
+		"index":  int64(ls.idx + 1),
+		"index0": int64(ls.idx),
+		"first":  ls.idx == 0,
+		"last":   ls.idx == n-1,
+		"length": int64(n),
+		"depth":  int64(v.ldepth),
+	}
+	if v.ldepth > 1 {
+		pls := &v.loops[v.ldepth-2]
+		pn := len(pls.items)
+		loopData["parent"] = map[string]any{
+			"index":  int64(pls.idx + 1),
+			"index0": int64(pls.idx),
+			"first":  pls.idx == 0,
+			"last":   pls.idx == pn-1,
+			"length": int64(pn),
+			"depth":  int64(v.ldepth - 1),
+		}
+	} else {
+		loopData["parent"] = nil
+	}
+	return FromAny(loopData)
+}
+
+// buildRange implements range(stop), range(start, stop), range(start, stop, step).
+func buildRange(args []int64) Value {
+	var start, stop, step int64
+	switch len(args) {
+	case 1:
+		start, stop, step = 0, args[0], 1
+	case 2:
+		start, stop, step = args[0], args[1], 1
+	case 3:
+		start, stop, step = args[0], args[1], args[2]
+	default:
+		return ListVal(nil)
+	}
+	if step == 0 {
+		return ListVal(nil)
+	}
+	var items []Value
+	if step > 0 {
+		for i := start; i < stop; i += step {
+			items = append(items, IntVal(i))
+		}
+	} else {
+		for i := start; i > stop; i += step {
+			items = append(items, IntVal(i))
+		}
+	}
+	return ListVal(items)
 }
 
 // ─── Stack helpers ────────────────────────────────────────────────────────────
@@ -323,7 +513,6 @@ func arithDiv(a, b Value) (Value, error) {
 		return Nil, &runtimeErr{msg: "division by zero"}
 	}
 	result := af / bf
-	// Return int if both operands were ints and result is whole
 	if a.typ == TypeInt && b.typ == TypeInt && result == float64(int64(result)) {
 		return IntVal(int64(result)), nil
 	}
@@ -346,7 +535,6 @@ func arithMod(a, b Value) (Value, error) {
 
 func valEqual(a, b Value) bool {
 	if a.typ != b.typ {
-		// Cross-type numeric equality
 		if (a.typ == TypeInt || a.typ == TypeFloat) && (b.typ == TypeInt || b.typ == TypeFloat) {
 			af, _ := a.ToFloat64()
 			bf, _ := b.ToFloat64()
@@ -369,7 +557,6 @@ func valEqual(a, b Value) bool {
 	return false
 }
 
-// valCompare returns -1, 0, or 1 for a <=> b.
 func valCompare(a, b Value) (int, error) {
 	if (a.typ == TypeInt || a.typ == TypeFloat) && (b.typ == TypeInt || b.typ == TypeFloat) {
 		af, _ := a.ToFloat64()

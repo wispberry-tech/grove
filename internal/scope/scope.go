@@ -32,3 +32,8 @@ func (s *Scope) Get(key string) (any, bool) {
 func (s *Scope) SetParent(p *Scope) {
 	s.parent = p
 }
+
+// Parent returns the parent scope, or nil if this is the root scope.
+func (s *Scope) Parent() *Scope {
+	return s.parent
+}
