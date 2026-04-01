@@ -363,6 +363,9 @@ type EngineIface interface {
 	// LoadTemplate compiles the named template from the engine's store.
 	// Returns (nil, error) if the store is not configured or the template is not found.
 	LoadTemplate(name string) (*compiler.Bytecode, error)
+	// MaxLoopIter returns the maximum number of loop iterations allowed per render.
+	// Returns 0 for unlimited.
+	MaxLoopIter() int
 }
 
 // ArgInt reads args[i] as an integer, returning def if out of range or not convertible.

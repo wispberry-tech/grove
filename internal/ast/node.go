@@ -363,3 +363,39 @@ type SlotNode struct {
 }
 
 func (*SlotNode) groveNode() {}
+
+// ─── Plan 7 nodes ─────────────────────────────────────────────────────────────
+
+// AssetNode declares an asset (CSS/JS/other) to collect into RenderResult.Assets.
+// Src and AssetType are required. Attrs holds remaining key=value attributes (defer, async, etc.).
+// Priority controls ordering within the asset's type group (higher = earlier). Default 0.
+type AssetNode struct {
+	Src       string
+	AssetType string         // from type= attr ("stylesheet", "script", etc.)
+	Attrs     []NamedArgNode // remaining attrs; bare idents get Value=StringLiteral{""}
+	Priority  int            // from priority= attr
+	Line      int
+}
+
+func (*AssetNode) groveNode() {}
+
+// MetaNode declares a metadata entry for RenderResult.Meta.
+// Key is the value of the name=, property=, or http-equiv= attribute.
+// Value is the value of the content= attribute.
+type MetaNode struct {
+	Key   string
+	Value string
+	Line  int
+}
+
+func (*MetaNode) groveNode() {}
+
+// HoistNode collects its rendered body into RenderResult.Hoisted[Target].
+// Target is a user-defined string (e.g. "head", "foot", "analytics").
+type HoistNode struct {
+	Target string
+	Body   []Node
+	Line   int
+}
+
+func (*HoistNode) groveNode() {}

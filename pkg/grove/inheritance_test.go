@@ -139,3 +139,33 @@ func TestInheritance_BaseTemplateStandaloneRender(t *testing.T) {
 	store.Set("base.html", `<nav>nav</nav>{% block content %}default{% endblock %}<footer>foot</footer>`)
 	require.Equal(t, "<nav>nav</nav>default<footer>foot</footer>", renderInherit(t, store, "base.html", grove.Data{}))
 }
+
+// ─── 4-level inheritance chain ────────────────────────────────────────────────
+
+func TestInheritance_FourLevelChain(t *testing.T) {
+	store := grove.NewMemoryStore()
+	store.Set("gp.html", `[{% block x %}gp{% endblock %}]`)
+	store.Set("p.html", `{% extends "gp.html" %}{% block x %}p{% endblock %}`)
+	store.Set("c.html", `{% extends "p.html" %}{% block x %}c{% endblock %}`)
+	store.Set("gc.html", `{% extends "c.html" %}{% block x %}gc{% endblock %}`)
+	require.Equal(t, "[gc]", renderInherit(t, store, "gc.html", grove.Data{}))
+}
+
+func TestInheritance_FourLevelSuperChain(t *testing.T) {
+	store := grove.NewMemoryStore()
+	store.Set("gp.html", `[{% block x %}gp{% endblock %}]`)
+	store.Set("p.html", `{% extends "gp.html" %}{% block x %}p:{{ super() }}{% endblock %}`)
+	store.Set("c.html", `{% extends "p.html" %}{% block x %}c:{{ super() }}{% endblock %}`)
+	store.Set("gc.html", `{% extends "c.html" %}{% block x %}gc:{{ super() }}{% endblock %}`)
+	require.Equal(t, "[gc:c:p:gp]", renderInherit(t, store, "gc.html", grove.Data{}))
+}
+
+// ─── block nested inside another block ───────────────────────────────────────
+
+func TestInheritance_BlockNestedInBlock(t *testing.T) {
+	// child can override the inner block independently of the outer block
+	store := grove.NewMemoryStore()
+	store.Set("base.html", `{% block outer %}[{% block inner %}inner-default{% endblock %}]{% endblock %}`)
+	store.Set("child.html", `{% extends "base.html" %}{% block inner %}inner-override{% endblock %}`)
+	require.Equal(t, "[inner-override]", renderInherit(t, store, "child.html", grove.Data{}))
+}

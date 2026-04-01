@@ -11,3 +11,12 @@ type MemoryStore = store.MemoryStore
 func NewMemoryStore() *MemoryStore {
 	return store.NewMemoryStore()
 }
+
+// FileSystemStore loads templates from a root directory on disk.
+// Template names that escape the root via ".." or that are absolute paths are rejected.
+type FileSystemStore = store.FileSystemStore
+
+// NewFileSystemStore creates a FileSystemStore rooted at root.
+func NewFileSystemStore(root string) *FileSystemStore {
+	return store.NewFileSystemStore(root)
+}

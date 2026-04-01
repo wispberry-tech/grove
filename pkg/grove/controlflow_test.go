@@ -269,3 +269,27 @@ func TestCapture_UsedInIf(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "[on]", result.Body)
 }
+
+// ─── SET scope in loop ────────────────────────────────────────────────────────
+
+func TestSet_InLoop_PersistsAfterLoop(t *testing.T) {
+	// for loops do not push a new scope, so set inside loop mutates outer scope
+	eng := grove.New()
+	result, err := eng.RenderTemplate(context.Background(),
+		`{% set last = "" %}{% for x in items %}{% set last = x %}{% endfor %}{{ last }}`,
+		grove.Data{"items": []string{"a", "b", "c"}})
+	require.NoError(t, err)
+	require.Equal(t, "c", result.Body)
+}
+
+// ─── CAPTURE in loop ─────────────────────────────────────────────────────────
+
+func TestCapture_InsideLoop(t *testing.T) {
+	// capture can accumulate loop body output into a variable
+	eng := grove.New()
+	result, err := eng.RenderTemplate(context.Background(),
+		`{% capture out %}{% for x in items %}{{ x }},{% endfor %}{% endcapture %}[{{ out }}]`,
+		grove.Data{"items": []string{"a", "b", "c"}})
+	require.NoError(t, err)
+	require.Equal(t, "[a,b,c,]", result.Body)
+}

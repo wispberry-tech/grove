@@ -264,3 +264,53 @@ func TestFilter_Striptags(t *testing.T) {
 func TestFilter_Nl2br(t *testing.T) {
 	require.Equal(t, "line1<br>\nline2", renderFilter(t, `{{ s | nl2br }}`, grove.Data{"s": "line1\nline2"}))
 }
+
+// ─── FILTER CHAINING ─────────────────────────────────────────────────────────
+
+func TestFilter_Chain_ThreeFilters(t *testing.T) {
+	// split → sort → join: three filters applied left-to-right
+	require.Equal(t, "a, b, c", renderFilter(t,
+		`{{ s | split(",") | sort | join(", ") }}`,
+		grove.Data{"s": "c,a,b"}))
+}
+
+func TestFilter_Chain_StringTransforms(t *testing.T) {
+	// trim → lower → title: three string filters
+	require.Equal(t, "Hello World", renderFilter(t,
+		`{{ s | trim | lower | title }}`,
+		grove.Data{"s": "  HELLO WORLD  "}))
+}
+
+// ─── DEFAULT ON NIL / UNDEFINED ──────────────────────────────────────────────
+
+func TestFilter_Default_OnUndefinedVar(t *testing.T) {
+	// undefined variable (not in data map) is falsy → default applies
+	require.Equal(t, "fallback", renderFilter(t,
+		`{{ missing | default("fallback") }}`,
+		grove.Data{}))
+}
+
+func TestFilter_Default_OnFalseValue(t *testing.T) {
+	// false is falsy → default applies
+	require.Equal(t, "no", renderFilter(t,
+		`{{ flag | default("no") }}`,
+		grove.Data{"flag": false}))
+}
+
+func TestFilter_Default_OnZero(t *testing.T) {
+	// 0 is falsy → default applies
+	require.Equal(t, "none", renderFilter(t,
+		`{{ n | default("none") }}`,
+		grove.Data{"n": 0}))
+}
+
+// ─── WORDCOUNT edge cases ─────────────────────────────────────────────────────
+
+func TestFilter_Wordcount_Empty(t *testing.T) {
+	require.Equal(t, "0", renderFilter(t, `{{ s | wordcount }}`, grove.Data{"s": ""}))
+}
+
+func TestFilter_Wordcount_MultiSpace(t *testing.T) {
+	// multiple spaces between words still counts correctly
+	require.Equal(t, "2", renderFilter(t, `{{ s | wordcount }}`, grove.Data{"s": "hello  world"}))
+}

@@ -89,6 +89,18 @@ const (
 	// OP_PROPS_INIT — no operands; reads bc.Props vs compStack.top().passedProps;
 	// validates required/unknown props and binds them into the current scope.
 	OP_PROPS_INIT
+
+	// ─── Plan 7 opcodes ────────────────────────────────────────────────────────
+	// OP_ASSET — collect an asset into the render context.
+	// Stack before: [src_str, type_str, k1, v1, ..., kN, vN, priority_int]
+	// A = N (number of extra key-value attr pairs, NOT counting src/type/priority).
+	OP_ASSET
+	// OP_META — collect a metadata key/value into the render context.
+	// Stack before: [content_str]; A = index into Consts for the key string.
+	OP_META
+	// OP_HOIST — render a body sub-bytecode and append output to hoisted[target].
+	// A = index into Consts for the target string; B = index into bc.Blocks for body.
+	OP_HOIST
 )
 
 // MacroParam is a single parameter in a compiled macro.

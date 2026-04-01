@@ -153,3 +153,38 @@ func TestImport_Basic(t *testing.T) {
 	store.Set("macros.html", `{% macro greet(name) %}Hello, {{ name }}!{% endmacro %}`)
 	require.Equal(t, "Hello, Grove!", renderStore(t, store, "page.html", grove.Data{}))
 }
+
+// ─── MACRO calling MACRO ──────────────────────────────────────────────────────
+
+func TestMacro_IsolatedFromOtherMacros(t *testing.T) {
+	// Macros cannot see other macros defined in the outer scope — each macro
+	// executes in an isolated scope with only its declared parameters bound.
+	eng := grove.New()
+	_, err := eng.RenderTemplate(context.Background(),
+		`{% macro inner(x) %}[{{ x }}]{% endmacro %}{% macro outer(x) %}{{ inner(x) }}{% endmacro %}{{ outer("hi") }}`,
+		grove.Data{})
+	// inner is not visible inside outer — expect an error
+	require.Error(t, err)
+}
+
+// ─── caller() edge cases ──────────────────────────────────────────────────────
+
+func TestMacro_CallerCalledTwice(t *testing.T) {
+	// caller() can be called multiple times; renders the body each time
+	eng := grove.New()
+	result, err := eng.RenderTemplate(context.Background(),
+		`{% macro wrap() %}{{ caller() }}|{{ caller() }}{% endmacro %}{% call wrap() %}body{% endcall %}`,
+		grove.Data{})
+	require.NoError(t, err)
+	require.Equal(t, "body|body", result.Body)
+}
+
+// ─── INCLUDE inside FOR loop ──────────────────────────────────────────────────
+
+func TestInclude_InsideForLoop(t *testing.T) {
+	// included template shares outer loop scope and sees loop variable
+	store := grove.NewMemoryStore()
+	store.Set("page.html", `{% for item in items %}{% include "row.html" %}{% endfor %}`)
+	store.Set("row.html", `{{ item }},`)
+	require.Equal(t, "a,b,c,", renderStore(t, store, "page.html", grove.Data{"items": []string{"a", "b", "c"}}))
+}

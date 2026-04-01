@@ -13,6 +13,59 @@ import (
 	"grove/internal/scope"
 )
 
+// renderCtx accumulates page-level data (assets, meta, hoisted HTML, warnings)
+// across an entire render pass including all sub-renders (components, includes, extends).
+type renderCtx struct {
+	assets      []assetEntry
+	seenSrc     map[string]bool
+	meta        map[string]string
+	hoisted     map[string][]string
+	warnings    []string
+	maxLoopIter int // 0 = unlimited
+	loopIter    int // running counter across all loops in this render pass
+}
+
+type assetEntry struct {
+	src       string
+	assetType string
+	attrs     map[string]string
+	priority  int
+}
+
+// ExecuteResult is the enriched output of a VM execution pass.
+type ExecuteResult struct {
+	Body string
+	RC   *renderCtx
+}
+
+// ExportedAsset is the public view of an assetEntry for use by pkg/grove.
+type ExportedAsset struct {
+	Src      string
+	Type     string
+	Attrs    map[string]string
+	Priority int
+}
+
+func (rc *renderCtx) ExportAssets() []ExportedAsset {
+	result := make([]ExportedAsset, len(rc.assets))
+	for i, a := range rc.assets {
+		result[i] = ExportedAsset{Src: a.src, Type: a.assetType, Attrs: a.attrs, Priority: a.priority}
+	}
+	return result
+}
+
+func (rc *renderCtx) ExportMeta() map[string]string {
+	return rc.meta
+}
+
+func (rc *renderCtx) ExportHoisted() map[string][]string {
+	return rc.hoisted
+}
+
+func (rc *renderCtx) ExportWarnings() []string {
+	return rc.warnings
+}
+
 // loopState holds per-loop iterator state.
 type loopState struct {
 	items []Value  // iteration items (list elements or map values in key order)
@@ -55,7 +108,8 @@ type VM struct {
 	blockSlots map[string][]*compiler.Bytecode // per-render block override table
 	blockChain []blockChainFrame               // current block execution context for super()
 	compStack  [16]componentFrame
-	csdepth    int // current component stack depth
+	csdepth    int        // current component stack depth
+	rc         *renderCtx // page-level render context (assets, meta, hoisted)
 }
 
 var vmPool = sync.Pool{
@@ -72,9 +126,15 @@ func (v *VM) currentWriter() *strings.Builder {
 	return &v.out
 }
 
-// Execute runs bc with data as the render context and returns the rendered string.
-func Execute(ctx context.Context, bc *compiler.Bytecode, data map[string]any, eng EngineIface) (string, error) {
+// Execute runs bc with data as the render context and returns an ExecuteResult.
+func Execute(ctx context.Context, bc *compiler.Bytecode, data map[string]any, eng EngineIface) (ExecuteResult, error) {
 	v := vmPool.Get().(*VM)
+	rc := &renderCtx{
+		seenSrc:     make(map[string]bool),
+		meta:        make(map[string]string),
+		hoisted:     make(map[string][]string),
+		maxLoopIter: eng.MaxLoopIter(),
+	}
 	defer func() {
 		v.out.Reset()
 		v.sp = 0
@@ -90,9 +150,11 @@ func Execute(ctx context.Context, bc *compiler.Bytecode, data map[string]any, en
 			v.blockChain = v.blockChain[:0]
 		}
 		v.csdepth = 0
+		v.rc = nil
 		vmPool.Put(v)
 	}()
 	v.eng = eng
+	v.rc = rc
 
 	globalSc := scope.New(nil)
 	for k, val := range eng.GlobalData() {
@@ -113,7 +175,11 @@ func Execute(ctx context.Context, bc *compiler.Bytecode, data map[string]any, en
 		}
 	}
 
-	return v.run(ctx, bc)
+	body, err := v.run(ctx, bc)
+	if err != nil {
+		return ExecuteResult{}, err
+	}
+	return ExecuteResult{Body: body, RC: rc}, nil
 }
 
 func (v *VM) run(ctx context.Context, bc *compiler.Bytecode) (string, error) {
@@ -354,6 +420,13 @@ func (v *VM) run(ctx context.Context, bc *compiler.Bytecode) (string, error) {
 			ls := &v.loops[v.ldepth-1]
 			ls.idx++
 			if ls.idx < len(ls.items) {
+				// Sandbox: check max loop iteration limit
+				if v.rc != nil && v.rc.maxLoopIter > 0 {
+					v.rc.loopIter++
+					if v.rc.loopIter > v.rc.maxLoopIter {
+						return "", &runtimeErr{msg: fmt.Sprintf("sandbox: loop iteration limit %d exceeded", v.rc.maxLoopIter)}
+					}
+				}
 				ip = int(instr.A) // jump back to loop top
 			} else {
 				v.ldepth-- // pop loop state
@@ -784,6 +857,53 @@ func (v *VM) run(ctx context.Context, bc *compiler.Bytecode) (string, error) {
 				}
 			}
 			// else: empty slot with no fill and no default — render nothing
+
+		// ─── Plan 7 opcodes ───────────────────────────────────────────────────
+
+		case compiler.OP_ASSET:
+			attrPairCount := int(instr.A)
+			// Pop in reverse order: priority last-pushed, then attr pairs, then type, then src
+			priorityVal := v.pop()
+			priority := 0
+			if n, ok := priorityVal.ToInt64(); ok {
+				priority = int(n)
+			}
+			attrs := make(map[string]string, attrPairCount)
+			for i := attrPairCount - 1; i >= 0; i-- {
+				val := v.pop()
+				key := v.pop()
+				attrs[key.String()] = val.String()
+			}
+			assetType := v.pop().String()
+			src := v.pop().String()
+
+			if !v.rc.seenSrc[src] {
+				v.rc.seenSrc[src] = true
+				v.rc.assets = append(v.rc.assets, assetEntry{
+					src:       src,
+					assetType: assetType,
+					attrs:     attrs,
+					priority:  priority,
+				})
+			}
+
+		case compiler.OP_META:
+			content := v.pop().String()
+			key := bc.Consts[instr.A].(string)
+			if _, exists := v.rc.meta[key]; exists {
+				v.rc.warnings = append(v.rc.warnings,
+					fmt.Sprintf("meta key %q overwritten", key))
+			}
+			v.rc.meta[key] = content
+
+		case compiler.OP_HOIST:
+			target := bc.Consts[instr.A].(string)
+			hoistBC := bc.Blocks[instr.B].Body
+			captured, err := v.execBlockCapture(ctx, hoistBC)
+			if err != nil {
+				return "", err
+			}
+			v.rc.hoisted[target] = append(v.rc.hoisted[target], captured)
 
 		default:
 			return "", fmt.Errorf("vm: unknown opcode %d at ip=%d", instr.Op, ip-1)

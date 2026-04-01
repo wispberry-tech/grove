@@ -145,6 +145,37 @@ func TestComponent_WithExtends(t *testing.T) {
 	require.Equal(t, "<div><h2>News</h2><p>Content</p></div>", renderComponent(t, store, "page.html", grove.Data{}))
 }
 
+// ─── Component inside for loop ───────────────────────────────────────────────
+
+func TestComponent_InForLoop(t *testing.T) {
+	store := grove.NewMemoryStore()
+	store.Set("badge.html", `{% props label %}<span>{{ label }}</span>`)
+	store.Set("page.html", `{% for item in items %}{% component "badge.html" label=item %}{% endcomponent %}{% endfor %}`)
+	require.Equal(t, "<span>a</span><span>b</span>",
+		renderComponent(t, store, "page.html", grove.Data{"items": []string{"a", "b"}}))
+}
+
+// ─── 3-level nested components ────────────────────────────────────────────────
+
+func TestComponent_ThreeLevelNested(t *testing.T) {
+	store := grove.NewMemoryStore()
+	store.Set("inner.html", `({% slot %}{% endslot %})`)
+	store.Set("middle.html", `[{% slot %}{% endslot %}]`)
+	store.Set("outer.html", `<{% slot %}{% endslot %}>`)
+	store.Set("page.html", `{% component "outer.html" %}{% component "middle.html" %}{% component "inner.html" %}content{% endcomponent %}{% endcomponent %}{% endcomponent %}`)
+	require.Equal(t, "<[(content)]>", renderComponent(t, store, "page.html", grove.Data{}))
+}
+
+// ─── Props with collection value ──────────────────────────────────────────────
+
+func TestComponent_PropsWithArrayValue(t *testing.T) {
+	store := grove.NewMemoryStore()
+	store.Set("list.html", `{% props items %}<ul>{% for i in items %}<li>{{ i }}</li>{% endfor %}</ul>`)
+	store.Set("page.html", `{% component "list.html" items=tags %}{% endcomponent %}`)
+	require.Equal(t, `<ul><li>go</li><li>web</li></ul>`,
+		renderComponent(t, store, "page.html", grove.Data{"tags": []string{"go", "web"}}))
+}
+
 // ─── component in inline template is an error ─────────────────────────────────
 
 func TestComponent_InInlineTemplate_Error(t *testing.T) {

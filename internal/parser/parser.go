@@ -12,15 +12,20 @@ import (
 
 // Parse converts a token stream into an AST.
 // inline=true forbids {% extends %} and {% import %} (used by RenderTemplate).
-func Parse(tokens []lexer.Token, inline bool) (*ast.Program, error) {
+// allowedTags is an optional whitelist of permitted tag names (nil = all allowed).
+func Parse(tokens []lexer.Token, inline bool, allowedTags ...map[string]bool) (*ast.Program, error) {
 	p := &parser{tokens: tokens, inline: inline}
+	if len(allowedTags) > 0 && allowedTags[0] != nil {
+		p.allowedTags = allowedTags[0]
+	}
 	return p.parseProgram()
 }
 
 type parser struct {
-	tokens []lexer.Token
-	pos    int
-	inline bool
+	tokens      []lexer.Token
+	pos         int
+	inline      bool
+	allowedTags map[string]bool // nil = all allowed; non-nil = whitelist
 }
 
 // ─── Program ──────────────────────────────────────────────────────────────────
@@ -140,6 +145,17 @@ func (p *parser) parseTag() (ast.Node, error) {
 		return nil, p.errorf(nameTok.Line, nameTok.Col, "expected tag name after {%%")
 	}
 
+	// Sandbox: check allowed tags whitelist (skip internal close-tags like endif, endfor, etc.)
+	if p.allowedTags != nil && !isCloseTag(name) {
+		if !p.allowedTags[name] {
+			return nil, &groverrors.ParseError{
+				Line:    nameTok.Line,
+				Column:  nameTok.Col,
+				Message: fmt.Sprintf("sandbox: tag %q is not allowed", name),
+			}
+		}
+	}
+
 	switch name {
 	case "raw":
 		p.advance() // consume "raw"
@@ -210,6 +226,22 @@ func (p *parser) parseTag() (ast.Node, error) {
 
 	case "props":
 		return p.parseProps(tagStart)
+
+	case "asset":
+		if p.inline {
+			return nil, &groverrors.ParseError{
+				Line:    tagStart.Line,
+				Column:  tagStart.Col,
+				Message: "{% asset %} not allowed in inline templates",
+			}
+		}
+		return p.parseAsset(tagStart)
+
+	case "meta":
+		return p.parseMeta(tagStart)
+
+	case "hoist":
+		return p.parseHoist(tagStart)
 
 	default:
 		return p.consumeTagRemainder(name, tagStart)
@@ -756,6 +788,18 @@ func (p *parser) errorf(line, col int, format string, args ...any) *groverrors.P
 	}
 }
 
+// isCloseTag returns true for closing/structural tags that should bypass the allowed-tags check.
+// These are tags that are always needed as syntactic closers (e.g. endif, endfor, else, etc.).
+func isCloseTag(name string) bool {
+	switch name {
+	case "endif", "endfor", "endunless", "endwith", "endcapture", "endmacro", "endcall",
+		"endblock", "endslot", "endcomponent", "endfill", "endhoist",
+		"else", "elif", "empty", "endraw":
+		return true
+	}
+	return false
+}
+
 // ─── Plan 4: Macro + composition parser methods ───────────────────────────────
 
 // parseCallArgs parses the argument list inside ( ) of a macro/function call.
@@ -1171,4 +1215,135 @@ func (p *parser) parseFill() (*ast.FillNode, error) {
 		return nil, err
 	}
 	return &ast.FillNode{Name: nameTok.Value, Body: body, Line: tagStart.Line}, nil
+}
+
+// ─── Plan 7: Web primitives parser methods ────────────────────────────────────
+
+// parseAsset parses {% asset "src" type="stylesheet" [k=v | bareIdent]* [priority=N] %}.
+// Bare idents (no = after them) are treated as boolean attributes (value = "").
+func (p *parser) parseAsset(tagStart lexer.Token) (*ast.AssetNode, error) {
+	p.advance() // consume "asset"
+	srcTok := p.advance()
+	if srcTok.Kind != lexer.TK_STRING {
+		return nil, p.errorf(srcTok.Line, srcTok.Col, "expected quoted asset src after asset")
+	}
+
+	node := &ast.AssetNode{Src: srcTok.Value, Line: tagStart.Line}
+
+	for p.peek().Kind != lexer.TK_TAG_END && !p.atEOF() {
+		keyTok := p.advance()
+		if keyTok.Kind != lexer.TK_IDENT {
+			return nil, p.errorf(keyTok.Line, keyTok.Col, "expected attribute name in asset tag")
+		}
+		key := keyTok.Value
+
+		// Check for = (value attr) or no = (boolean attr)
+		if p.peek().Kind == lexer.TK_ASSIGN {
+			p.advance() // consume =
+			val, err := p.parseExpr(0)
+			if err != nil {
+				return nil, err
+			}
+			switch key {
+			case "type":
+				// type must be a string literal
+				if sl, ok := val.(*ast.StringLiteral); ok {
+					node.AssetType = sl.Value
+				} else {
+					return nil, p.errorf(keyTok.Line, keyTok.Col, "asset type= must be a string literal")
+				}
+			case "priority":
+				// priority must be an integer literal
+				if il, ok := val.(*ast.IntLiteral); ok {
+					node.Priority = int(il.Value)
+				} else {
+					return nil, p.errorf(keyTok.Line, keyTok.Col, "asset priority= must be an integer literal")
+				}
+			default:
+				node.Attrs = append(node.Attrs, ast.NamedArgNode{Key: key, Value: val, Line: keyTok.Line})
+			}
+		} else {
+			// Boolean attr: bare ident → value = ""
+			node.Attrs = append(node.Attrs, ast.NamedArgNode{
+				Key:   key,
+				Value: &ast.StringLiteral{Value: "", Line: keyTok.Line},
+				Line:  keyTok.Line,
+			})
+		}
+	}
+
+	return node, p.expectTagEnd()
+}
+
+// parseMeta parses {% meta name="key" content="val" %} (or property=, http-equiv=).
+// The metadata key is derived from the value of the name=, property=, or http-equiv= attribute.
+func (p *parser) parseMeta(tagStart lexer.Token) (*ast.MetaNode, error) {
+	p.advance() // consume "meta"
+
+	var metaKey, metaContent string
+	for p.peek().Kind != lexer.TK_TAG_END && !p.atEOF() {
+		keyTok := p.advance()
+		if keyTok.Kind != lexer.TK_IDENT {
+			return nil, p.errorf(keyTok.Line, keyTok.Col, "expected attribute name in meta tag")
+		}
+		if p.peek().Kind != lexer.TK_ASSIGN {
+			return nil, p.errorf(p.peek().Line, p.peek().Col, "expected = after %q in meta tag", keyTok.Value)
+		}
+		p.advance() // consume =
+		valTok := p.advance()
+		if valTok.Kind != lexer.TK_STRING {
+			return nil, p.errorf(valTok.Line, valTok.Col, "meta attribute values must be string literals")
+		}
+		switch keyTok.Value {
+		case "name", "property", "http-equiv":
+			metaKey = valTok.Value
+		case "content":
+			metaContent = valTok.Value
+		}
+		// ignore unknown attrs silently
+	}
+
+	if metaKey == "" {
+		return nil, p.errorf(tagStart.Line, tagStart.Col, "meta tag requires name=, property=, or http-equiv= attribute")
+	}
+	return &ast.MetaNode{Key: metaKey, Value: metaContent, Line: tagStart.Line}, p.expectTagEnd()
+}
+
+// parseHoist parses {% hoist target="name" %}...{% endhoist %}.
+func (p *parser) parseHoist(tagStart lexer.Token) (*ast.HoistNode, error) {
+	p.advance() // consume "hoist"
+
+	var target string
+	for p.peek().Kind != lexer.TK_TAG_END && !p.atEOF() {
+		keyTok := p.advance()
+		if keyTok.Kind != lexer.TK_IDENT {
+			return nil, p.errorf(keyTok.Line, keyTok.Col, "expected attribute name in hoist tag")
+		}
+		if p.peek().Kind != lexer.TK_ASSIGN {
+			return nil, p.errorf(p.peek().Line, p.peek().Col, "expected = after %q in hoist tag", keyTok.Value)
+		}
+		p.advance() // consume =
+		valTok := p.advance()
+		if valTok.Kind != lexer.TK_STRING {
+			return nil, p.errorf(valTok.Line, valTok.Col, "hoist target must be a string literal")
+		}
+		if keyTok.Value == "target" {
+			target = valTok.Value
+		}
+	}
+	if target == "" {
+		return nil, p.errorf(tagStart.Line, tagStart.Col, "hoist tag requires target= attribute")
+	}
+	if err := p.expectTagEnd(); err != nil {
+		return nil, err
+	}
+
+	body, err := p.parseBody("endhoist")
+	if err != nil {
+		return nil, err
+	}
+	if err := p.expectTag("endhoist"); err != nil {
+		return nil, err
+	}
+	return &ast.HoistNode{Target: target, Body: body, Line: tagStart.Line}, nil
 }

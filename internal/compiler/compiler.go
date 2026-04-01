@@ -107,8 +107,7 @@ func (c *cmp) compileBlockDef(n *ast.BlockNode) error {
 		return err
 	}
 	sub.emit(OP_HALT, 0, 0, 0)
-	bodyBC := &Bytecode{Instrs: sub.instrs, Consts: sub.consts, Names: sub.names, Macros: sub.macros}
-	c.blocks = append(c.blocks, BlockDef{Name: n.Name, Body: bodyBC})
+	c.blocks = append(c.blocks, BlockDef{Name: n.Name, Body: subBytecode(sub)})
 	return nil
 }
 
@@ -224,6 +223,15 @@ func (c *cmp) compileNode(node ast.Node) error {
 
 	case *ast.ComponentNode:
 		return c.compileComponent(n)
+
+	case *ast.AssetNode:
+		return c.compileAsset(n)
+
+	case *ast.MetaNode:
+		return c.compileMeta(n)
+
+	case *ast.HoistNode:
+		return c.compileHoist(n)
 
 	default:
 		return fmt.Errorf("compiler: unknown node type %T", node)
@@ -504,7 +512,7 @@ func (c *cmp) compileMacro(n *ast.MacroNode) error {
 		return err
 	}
 	sub.emit(OP_HALT, 0, 0, 0)
-	bodyBC := &Bytecode{Instrs: sub.instrs, Consts: sub.consts, Names: sub.names, Macros: sub.macros}
+	bodyBC := subBytecode(sub)
 
 	params := make([]MacroParam, len(n.Params))
 	for i, p := range n.Params {
@@ -570,7 +578,7 @@ func (c *cmp) compileCallNode(n *ast.CallNode) error {
 		return err
 	}
 	sub.emit(OP_HALT, 0, 0, 0)
-	bodyBC := &Bytecode{Instrs: sub.instrs, Consts: sub.consts, Names: sub.names, Macros: sub.macros}
+	bodyBC := subBytecode(sub)
 	callerDef := MacroDef{Name: "__caller__", Params: nil, Body: bodyBC}
 	callerIdx := len(c.macros)
 	c.macros = append(c.macros, callerDef)
@@ -621,14 +629,62 @@ func (c *cmp) compileImport(n *ast.ImportNode) error {
 // ─── Plan 6: Component compiler ───────────────────────────────────────────────
 
 // subBytecode creates a Bytecode from a sub-compiler's output.
+// This must include ALL data arrays the sub-compiler may have populated
+// (Components, Blocks, etc.) so that opcodes referencing them by index work
+// correctly when the sub-bytecode runs in isolation (e.g. block bodies in
+// template inheritance, fill bodies in components, hoist bodies, etc.).
 func subBytecode(sub *cmp) *Bytecode {
 	return &Bytecode{
 		Instrs:     sub.instrs,
 		Consts:     sub.consts,
 		Names:      sub.names,
 		Macros:     sub.macros,
+		Blocks:     sub.blocks,
 		Components: sub.components,
 	}
+}
+
+// ─── Plan 7 compile methods ───────────────────────────────────────────────────
+
+// compileAsset compiles {% asset "src" type="..." [attrs] [priority=N] %}.
+// Stack layout pushed before OP_ASSET: src, type, k1, v1, ..., kN, vN, priority
+func (c *cmp) compileAsset(n *ast.AssetNode) error {
+	c.emitPushConst(n.Src)
+	c.emitPushConst(n.AssetType)
+	for _, attr := range n.Attrs {
+		c.emitPushConst(attr.Key)
+		if err := c.compileExpr(attr.Value); err != nil {
+			return err
+		}
+	}
+	c.emitPushConst(int64(n.Priority))
+	c.emit(OP_ASSET, uint16(len(n.Attrs)), 0, 0)
+	return nil
+}
+
+// compileMeta compiles {% meta name="key" content="val" %}.
+func (c *cmp) compileMeta(n *ast.MetaNode) error {
+	keyIdx := len(c.consts)
+	c.consts = append(c.consts, n.Key)
+	c.emitPushConst(n.Value)
+	c.emit(OP_META, uint16(keyIdx), 0, 0)
+	return nil
+}
+
+// compileHoist compiles {% hoist target="name" %}body{% endhoist %}.
+func (c *cmp) compileHoist(n *ast.HoistNode) error {
+	sub := &cmp{nameIdx: make(map[string]int)}
+	if err := sub.compileBody(n.Body); err != nil {
+		return err
+	}
+	sub.emit(OP_HALT, 0, 0, 0)
+	blockBC := subBytecode(sub)
+	c.blocks = append(c.blocks, BlockDef{Name: "__hoist__:" + n.Target, Body: blockBC})
+	blockIdx := len(c.blocks) - 1
+	targetIdx := len(c.consts)
+	c.consts = append(c.consts, n.Target)
+	c.emit(OP_HOIST, uint16(targetIdx), uint16(blockIdx), 0)
+	return nil
 }
 
 // compileComponent compiles {% component "name" k=v %}...{% endcomponent %}.
