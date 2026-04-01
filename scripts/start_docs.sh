@@ -1,1 +1,0 @@
-go run ./docs/server/main.go

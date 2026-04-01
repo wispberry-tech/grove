@@ -1,1576 +1,1349 @@
+// internal/parser/parser.go
 package parser
 
 import (
 	"fmt"
 	"strconv"
 
-	"template-wisp/internal/ast"
-	"template-wisp/internal/lexer"
-	"template-wisp/internal/scope"
+	"wispy/internal/ast"
+	"wispy/internal/wispyrrors"
+	"wispy/internal/lexer"
 )
 
-// Parser holds the state of the parser.
-type Parser struct {
-	l              *lexer.Lexer
-	curTok         lexer.Token
-	peekTok        lexer.Token
-	errors         []string
-	prefixParseFns map[lexer.TokenType]prefixParseFn
-	infixParseFns  map[lexer.TokenType]infixParseFn
-	currentScope   *scope.Scope
-	skipAdvance    bool // if true, skip nextToken() in ParseProgram
-}
-
-// NewParser creates a new parser with the given lexer.
-func NewParser(l *lexer.Lexer) *Parser {
-	p := &Parser{
-		l:              l,
-		errors:         []string{},
-		prefixParseFns: make(map[lexer.TokenType]prefixParseFn),
-		infixParseFns:  make(map[lexer.TokenType]infixParseFn),
-		currentScope:   scope.NewScope(),
+// Parse converts a token stream into an AST.
+// inline=true forbids {% extends %} and {% import %} (used by RenderTemplate).
+// allowedTags is an optional whitelist of permitted tag names (nil = all allowed).
+func Parse(tokens []lexer.Token, inline bool, allowedTags ...map[string]bool) (*ast.Program, error) {
+	p := &parser{tokens: tokens, inline: inline}
+	if len(allowedTags) > 0 && allowedTags[0] != nil {
+		p.allowedTags = allowedTags[0]
 	}
-	p.registerPrefix()
-	p.registerInfix()
-
-	// Read two tokens, so curTok and peekTok are both set
-	p.nextToken()
-	p.nextToken()
-
-	return p
+	return p.parseProgram()
 }
 
-// nextToken advances the token stream.
-func (p *Parser) nextToken() {
-	p.curTok = p.peekTok
-	p.peekTok = p.l.NextToken()
+type parser struct {
+	tokens      []lexer.Token
+	pos         int
+	inline      bool
+	allowedTags map[string]bool // nil = all allowed; non-nil = whitelist
 }
 
-// ParseProgram parses the entire program.
-func (p *Parser) ParseProgram() *ast.Program {
-	program := &ast.Program{}
-	program.Statements = []ast.Statement{}
+// ─── Program ──────────────────────────────────────────────────────────────────
 
-	for p.curTok.Type != lexer.EOF {
-		stmt := p.parseStatement()
-		if stmt != nil {
-			program.Statements = append(program.Statements, stmt)
+func (p *parser) parseProgram() (*ast.Program, error) {
+	prog := &ast.Program{}
+	for !p.atEOF() {
+		node, err := p.parseNode()
+		if err != nil {
+			return nil, err
 		}
-		// Only advance if we're not already at EOF and skipAdvance is not set
-		if p.curTok.Type != lexer.EOF && !p.skipAdvance {
-			p.nextToken()
+		if node != nil {
+			prog.Body = append(prog.Body, node)
 		}
-		p.skipAdvance = false
 	}
-
-	return program
+	return prog, nil
 }
 
-// Errors returns any parser errors.
-func (p *Parser) Errors() []string {
-	return p.errors
-}
-
-// CurrentScope returns the current scope.
-func (p *Parser) CurrentScope() *scope.Scope {
-	return p.currentScope
-}
-
-// PushScope creates a new child scope.
-func (p *Parser) PushScope() {
-	p.currentScope = scope.NewChildScope(p.currentScope)
-}
-
-// PopScope destroys the current scope and returns to the parent.
-func (p *Parser) PopScope() {
-	if p.currentScope.Parent() != nil {
-		parent := p.currentScope.Parent()
-		p.currentScope.Release()
-		p.currentScope = parent
-	}
-}
-
-// PushIsolatedScope creates a new isolated scope.
-func (p *Parser) PushIsolatedScope() {
-	p.currentScope = scope.NewIsolatedScope()
-}
-
-// peekError adds an error for the expected token.
-func (p *Parser) peekError(t lexer.TokenType) {
-	msg := "expected next token to be %s, got %s instead"
-	p.errors = append(p.errors, fmt.Sprintf(msg, t, p.peekTok.Type))
-}
-
-// parseStatement parses a statement.
-func (p *Parser) parseStatement() ast.Statement {
-	switch p.curTok.Type {
-	case lexer.LET:
-		return p.parseLetStatement()
-	case lexer.IF:
-		return p.parseIfStatement()
-	case lexer.RETURN:
-		return p.parseReturnStatement()
-	case lexer.LBRACE_PCT:
-		return p.parseWispStatement()
-	case lexer.TEXT:
-		return p.parseTextContent()
-	case lexer.WHEN:
-		return p.parseWispWhenStatement()
-	case lexer.ELSIF:
-		return p.parseWispElsifStatement()
+func (p *parser) parseNode() (ast.Node, error) {
+	tk := p.peek()
+	switch tk.Kind {
+	case lexer.TK_TEXT:
+		p.advance()
+		return &ast.TextNode{Value: tk.Value, Line: tk.Line}, nil
+	case lexer.TK_OUTPUT_START:
+		return p.parseOutput()
+	case lexer.TK_TAG_START:
+		return p.parseTag()
+	case lexer.TK_EOF:
+		return nil, nil
 	default:
-		return p.parseExpressionStatement()
+		return nil, p.errorf(tk.Line, tk.Col, "unexpected token %q", tk.Value)
 	}
 }
 
-// parseLetStatement parses a let or assign statement.
-func (p *Parser) parseLetStatement() *ast.LetStatement {
-	stmt := &ast.LetStatement{Token: p.curTok}
-
-	// Check if this is Wisp style: let .name = value
-	if p.peekTokIs(lexer.DOT) {
-		p.nextToken() // consume LET
-		p.nextToken() // consume DOT
-
-		if !p.expectPeek(lexer.IDENT) {
-			return nil
+// parseBody reads nodes until one of the stopTags is the current tag name.
+// It does NOT consume the stop tag itself.
+func (p *parser) parseBody(stopTags ...string) ([]ast.Node, error) {
+	var nodes []ast.Node
+	for !p.atEOF() {
+		// Peek at next tag name to detect stop conditions
+		if p.peek().Kind == lexer.TK_TAG_START {
+			name, ok := p.peekTagName()
+			if ok {
+				for _, stop := range stopTags {
+					if name == stop {
+						return nodes, nil
+					}
+				}
+			}
 		}
-
-		stmt.Name = &ast.Identifier{Token: p.curTok, Value: p.curTok.Literal}
-
-		// Expect = or ASSIGN_OP
-		if !p.peekTokIs(lexer.ASSIGN_OP) && !p.peekTokIs(lexer.ASSIGN) {
-			p.peekError(lexer.ASSIGN_OP)
-			return nil
+		node, err := p.parseNode()
+		if err != nil {
+			return nil, err
 		}
-		p.nextToken()
-
-		// Parse the value expression
-		p.nextToken()
-		stmt.Value = p.parseExpression(LOWEST)
-
-		// Check for optional semicolon
-		if p.peekTokIs(lexer.SEMICOLON) {
-			p.nextToken()
+		if node != nil {
+			nodes = append(nodes, node)
 		}
-
-		return stmt
 	}
-
-	// Traditional style: let x = value
-	if !p.expectPeek(lexer.IDENT) {
-		return nil
-	}
-
-	stmt.Name = &ast.Identifier{Token: p.curTok, Value: p.curTok.Literal}
-
-	// Expect = or ASSIGN_OP
-	if !p.peekTokIs(lexer.ASSIGN_OP) && !p.peekTokIs(lexer.ASSIGN) {
-		p.peekError(lexer.ASSIGN_OP)
-		return nil
-	}
-	p.nextToken()
-
-	// Parse the value expression
-	p.nextToken()
-	stmt.Value = p.parseExpression(LOWEST)
-
-	// Check for optional semicolon
-	if p.peekTokIs(lexer.SEMICOLON) {
-		p.nextToken()
-	}
-
-	return stmt
+	return nodes, nil
 }
 
-// parseReturnStatement parses a return statement.
-func (p *Parser) parseReturnStatement() *ast.ReturnStatement {
-	stmt := &ast.ReturnStatement{Token: p.curTok}
-
-	p.nextToken()
-
-	stmt.ReturnValue = p.parseExpression(LOWEST)
-
-	if p.peekTokIs(lexer.SEMICOLON) {
-		p.nextToken()
+// peekTagName returns the tag name of the upcoming {% name ... %} without consuming it.
+func (p *parser) peekTagName() (string, bool) {
+	if p.pos+1 < len(p.tokens) {
+		return tokenTagName(p.tokens[p.pos+1])
 	}
-
-	return stmt
+	return "", false
 }
 
-// parseIfStatement parses an if statement.
-func (p *Parser) parseIfStatement() *ast.IfStatement {
-	stmt := &ast.IfStatement{Token: p.curTok}
-
-	// Check if this is Wisp style: {% if .condition %}
-	if p.peekTokIs(lexer.LBRACE_PCT) {
-		p.nextToken() // consume IF
-		p.nextToken() // consume {%
-
-		// Parse the condition
-		stmt.Condition = p.parseExpression(LOWEST)
-
-		// Expect %}
-		if !p.expectPeek(lexer.RBRACE_PCT) {
-			return nil
-		}
-
-		return stmt
+// tokenTagName extracts the string tag name from a token (handles keywords used as tag names).
+func tokenTagName(tk lexer.Token) (string, bool) {
+	switch tk.Kind {
+	case lexer.TK_IDENT:
+		return tk.Value, true
+	case lexer.TK_IF:
+		return "if", true
+	case lexer.TK_ELSE:
+		return "else", true
+	case lexer.TK_NOT:
+		return "not", true
+	case lexer.TK_IN:
+		return "in", true
 	}
-
-	// Traditional style: if (condition) { ... }
-	if !p.expectPeek(lexer.LPAREN) {
-		return nil
-	}
-
-	p.nextToken()
-	stmt.Condition = p.parseExpression(LOWEST)
-
-	if !p.expectPeek(lexer.RPAREN) {
-		return nil
-	}
-
-	if !p.expectPeek(lexer.LBRACE) {
-		return nil
-	}
-
-	stmt.Consequence = p.parseBlockStatement()
-
-	if p.peekTokIs(lexer.ELSE) {
-		p.nextToken()
-
-		if !p.expectPeek(lexer.LBRACE) {
-			return nil
-		}
-
-		stmt.Alternative = p.parseBlockStatement()
-	}
-
-	return stmt
+	return "", false
 }
 
-// parseBlockStatement parses a block of statements.
-func (p *Parser) parseBlockStatement() *ast.BlockStatement {
-	block := &ast.BlockStatement{Token: p.curTok}
-	block.Statements = []ast.Statement{}
+// ─── Output {{ expr }} ────────────────────────────────────────────────────────
 
-	p.nextToken()
-
-	for !p.curTokIs(lexer.RBRACE) && !p.curTokIs(lexer.EOF) {
-		stmt := p.parseStatement()
-		if stmt != nil {
-			block.Statements = append(block.Statements, stmt)
-		}
-		p.nextToken()
-	}
-
-	return block
-}
-
-// parseExpressionStatement parses an expression statement.
-func (p *Parser) parseExpressionStatement() *ast.ExpressionStatement {
-	stmt := &ast.ExpressionStatement{Token: p.curTok}
-
-	stmt.Expression = p.parseExpression(LOWEST)
-
-	if p.peekTokIs(lexer.SEMICOLON) {
-		p.nextToken()
-	}
-
-	return stmt
-}
-
-// parseTextContent parses literal text content between Wisp tags.
-func (p *Parser) parseTextContent() *ast.TextContent {
-	stmt := &ast.TextContent{
-		Token: p.curTok,
-		Value: p.curTok.Literal,
-	}
-	return stmt
-}
-
-// parseExpression parses an expression.
-func (p *Parser) parseExpression(precedence int) ast.Expression {
-	prefix := p.prefixParseFns[p.curTok.Type]
-	if prefix == nil {
-		p.noPrefixParseFnError(p.curTok.Type)
-		return nil
-	}
-	leftExp := prefix(p)
-
-	for !p.peekTokIs(lexer.SEMICOLON) && precedence < p.peekPrecedence() {
-		infix := p.infixParseFns[p.peekTok.Type]
-		if infix == nil {
-			return leftExp
-		}
-		p.nextToken()
-		leftExp = infix(p, leftExp)
-	}
-
-	return leftExp
-}
-
-// Helper functions
-func (p *Parser) curTokIs(t lexer.TokenType) bool {
-	return p.curTok.Type == t
-}
-
-func (p *Parser) peekTokIs(t lexer.TokenType) bool {
-	return p.peekTok.Type == t
-}
-
-func (p *Parser) expectPeek(t lexer.TokenType) bool {
-	if p.peekTokIs(t) {
-		p.nextToken()
-		return true
-	} else {
-		p.peekError(t)
-		return false
-	}
-}
-
-func (p *Parser) peekPrecedence() int {
-	if p, ok := precedences[p.peekTok.Type]; ok {
-		return p
-	}
-	return LOWEST
-}
-
-func (p *Parser) curPrecedence() int {
-	if p, ok := precedences[p.curTok.Type]; ok {
-		return p
-	}
-	return LOWEST
-}
-
-var precedences = map[lexer.TokenType]int{
-	lexer.EQ:       EQUALS,
-	lexer.NOT_EQ:   EQUALS,
-	lexer.LT:       LESSGREATER,
-	lexer.LTE:      LESSGREATER,
-	lexer.GT:       LESSGREATER,
-	lexer.GTE:      LESSGREATER,
-	lexer.PLUS:     SUM,
-	lexer.MINUS:    SUM,
-	lexer.SLASH:    PRODUCT,
-	lexer.ASTERISK: PRODUCT,
-	lexer.LPAREN:   CALL,
-	lexer.AS:       LOWEST,
-	lexer.IN:       EQUALS,
-	lexer.COMMA:    LOWEST,
-}
-
-// TODO: Define precedence constants
-const (
-	_ int = iota
-	LOWEST
-	EQUALS
-	LESSGREATER
-	SUM
-	PRODUCT
-	CALL
-	PREFIX
-)
-
-// TODO: Initialize prefix and infix parse functions
-var prefixParseFns map[lexer.TokenType]prefixParseFn
-var infixParseFns map[lexer.TokenType]infixParseFn
-
-type prefixParseFn func(p *Parser) ast.Expression
-type infixParseFn func(p *Parser, left ast.Expression) ast.Expression
-
-func (p *Parser) registerPrefix() {
-	p.prefixParseFns[lexer.IDENT] = parseIdentifier
-	p.prefixParseFns[lexer.NUMBER] = parseIntegerLiteral
-	p.prefixParseFns[lexer.BANG] = parsePrefixExpression
-	p.prefixParseFns[lexer.MINUS] = parsePrefixExpression
-	p.prefixParseFns[lexer.TRUE] = parseBoolean
-	p.prefixParseFns[lexer.FALSE] = parseBoolean
-	p.prefixParseFns[lexer.LPAREN] = parseGroupedExpression
-	p.prefixParseFns[lexer.IF] = parseIfExpression
-	p.prefixParseFns[lexer.FUNCTION] = parseFunctionLiteral
-	p.prefixParseFns[lexer.DOT] = parseDotExpression
-	p.prefixParseFns[lexer.STRING] = parseStringLiteral
-	p.prefixParseFns[lexer.PIPE] = parsePipeExpression
-}
-
-func (p *Parser) registerInfix() {
-	p.infixParseFns[lexer.PLUS] = parseInfixExpression
-	p.infixParseFns[lexer.MINUS] = parseInfixExpression
-	p.infixParseFns[lexer.SLASH] = parseInfixExpression
-	p.infixParseFns[lexer.ASTERISK] = parseInfixExpression
-	p.infixParseFns[lexer.EQ] = parseInfixExpression
-	p.infixParseFns[lexer.NOT_EQ] = parseInfixExpression
-	p.infixParseFns[lexer.LT] = parseInfixExpression
-	p.infixParseFns[lexer.LTE] = parseInfixExpression
-	p.infixParseFns[lexer.GT] = parseInfixExpression
-	p.infixParseFns[lexer.GTE] = parseInfixExpression
-	p.infixParseFns[lexer.IN] = parseInfixExpression
-}
-
-func (p *Parser) noPrefixParseFnError(t lexer.TokenType) {
-	msg := "no prefix parse function for %s found"
-	p.errors = append(p.errors, fmt.Sprintf(msg, t))
-}
-
-// parseIdentifier parses an identifier.
-func parseIdentifier(p *Parser) ast.Expression {
-	return &ast.Identifier{Token: p.curTok, Value: p.curTok.Literal}
-}
-
-// parseIntegerLiteral parses an integer literal.
-func parseIntegerLiteral(p *Parser) ast.Expression {
-	lit := &ast.IntegerLiteral{Token: p.curTok}
-
-	value, err := strconv.ParseInt(p.curTok.Literal, 0, 64)
+func (p *parser) parseOutput() (*ast.OutputNode, error) {
+	start := p.advance() // consume OUTPUT_START
+	expr, err := p.parseExpr(0)
 	if err != nil {
-		msg := "could not parse %q as integer"
-		p.errors = append(p.errors, fmt.Sprintf(msg, p.curTok.Literal))
-		return nil
+		return nil, err
 	}
-
-	lit.Value = value
-	return lit
+	end := p.peek()
+	if end.Kind != lexer.TK_OUTPUT_END {
+		return nil, p.errorf(end.Line, end.Col, "expected }}, got %q", end.Value)
+	}
+	p.advance() // consume OUTPUT_END
+	return &ast.OutputNode{
+		Expr:       expr,
+		StripLeft:  start.StripLeft,
+		StripRight: end.StripRight,
+		Line:       start.Line,
+	}, nil
 }
 
-// parseBoolean parses a boolean literal.
-func parseBoolean(p *Parser) ast.Expression {
-	return &ast.Boolean{Token: p.curTok, Value: p.curTokIs(lexer.TRUE)}
-}
+// ─── Tags {% name ... %} ──────────────────────────────────────────────────────
 
-// parsePrefixExpression parses a prefix expression.
-func parsePrefixExpression(p *Parser) ast.Expression {
-	expression := &ast.PrefixExpression{
-		Token:    p.curTok,
-		Operator: p.curTok.Literal,
+func (p *parser) parseTag() (ast.Node, error) {
+	tagStart := p.advance() // consume TAG_START
+
+	nameTok := p.peek()
+	name, ok := tokenTagName(nameTok)
+	if !ok {
+		return nil, p.errorf(nameTok.Line, nameTok.Col, "expected tag name after {%%")
 	}
 
-	p.nextToken()
-
-	expression.Right = p.parseExpression(PREFIX)
-
-	return expression
-}
-
-// parseInfixExpression parses an infix expression.
-func parseInfixExpression(p *Parser, left ast.Expression) ast.Expression {
-	expression := &ast.InfixExpression{
-		Token:    p.curTok,
-		Operator: p.curTok.Literal,
-		Left:     left,
-	}
-
-	precedence := p.curPrecedence()
-	p.nextToken()
-	expression.Right = p.parseExpression(precedence)
-
-	return expression
-}
-
-// parseGroupedExpression parses a grouped expression.
-func parseGroupedExpression(p *Parser) ast.Expression {
-	p.nextToken()
-
-	exp := p.parseExpression(LOWEST)
-
-	if !p.expectPeek(lexer.RPAREN) {
-		return nil
-	}
-
-	return exp
-}
-
-// parseIfExpression parses an if expression.
-func parseIfExpression(p *Parser) ast.Expression {
-	expression := &ast.IfExpression{Token: p.curTok}
-
-	if !p.expectPeek(lexer.LPAREN) {
-		return nil
-	}
-
-	p.nextToken()
-	expression.Condition = p.parseExpression(LOWEST)
-
-	if !p.expectPeek(lexer.RPAREN) {
-		return nil
-	}
-
-	if !p.expectPeek(lexer.LBRACE) {
-		return nil
-	}
-
-	expression.Consequence = p.parseBlockStatement()
-
-	if p.peekTokIs(lexer.ELSE) {
-		p.nextToken()
-
-		if !p.expectPeek(lexer.LBRACE) {
-			return nil
-		}
-
-		expression.Alternative = p.parseBlockStatement()
-	}
-
-	return expression
-}
-
-// parseFunctionLiteral parses a function literal.
-func parseFunctionLiteral(p *Parser) ast.Expression {
-	lit := &ast.FunctionLiteral{Token: p.curTok}
-
-	if !p.expectPeek(lexer.LPAREN) {
-		return nil
-	}
-
-	lit.Parameters = p.parseFunctionParameters()
-
-	if !p.expectPeek(lexer.LBRACE) {
-		return nil
-	}
-
-	lit.Body = p.parseBlockStatement()
-
-	return lit
-}
-
-// parseFunctionParameters parses function parameters.
-func (p *Parser) parseFunctionParameters() []*ast.Identifier {
-	identifiers := []*ast.Identifier{}
-
-	if p.peekTokIs(lexer.RPAREN) {
-		p.nextToken()
-		return identifiers
-	}
-
-	p.nextToken()
-
-	ident := &ast.Identifier{Token: p.curTok, Value: p.curTok.Literal}
-	identifiers = append(identifiers, ident)
-
-	for p.peekTokIs(lexer.COMMA) {
-		p.nextToken()
-		p.nextToken()
-		ident := &ast.Identifier{Token: p.curTok, Value: p.curTok.Literal}
-		identifiers = append(identifiers, ident)
-	}
-
-	if !p.expectPeek(lexer.RPAREN) {
-		return nil
-	}
-
-	return identifiers
-}
-
-// parseDotExpression parses a dot expression (variable access): .name, .user.name
-func parseDotExpression(p *Parser) ast.Expression {
-	// Create a dot expression node
-	dotExpr := &ast.DotExpression{Token: p.curTok}
-
-	// Expect an identifier after the dot
-	if !p.expectPeek(lexer.IDENT) {
-		return nil
-	}
-
-	// The identifier is the field name
-	dotExpr.Field = &ast.Identifier{Token: p.curTok, Value: p.curTok.Literal}
-
-	// Handle chained access: .user.name
-	// Stop if we see RBRACE_PCT (end of Wisp statement) or other terminators
-	for p.peekTokIs(lexer.DOT) && !p.peekTokIs(lexer.RBRACE_PCT) {
-		p.nextToken() // consume the dot
-		if !p.expectPeek(lexer.IDENT) {
-			return nil
-		}
-		// Add to chain
-		nextField := &ast.Identifier{Token: p.curTok, Value: p.curTok.Literal}
-		dotExpr.Chain = append(dotExpr.Chain, nextField)
-	}
-
-	// Don't advance - let parseExpression() handle positioning
-	// This ensures consistency with other prefix parse functions
-
-	return dotExpr
-}
-
-// parseStringLiteral parses a string literal.
-func parseStringLiteral(p *Parser) ast.Expression {
-	lit := &ast.StringLiteral{Token: p.curTok, Value: p.curTok.Literal}
-	// Don't advance - let parseExpression() handle positioning
-	return lit
-}
-
-// parsePipeExpression parses a pipe expression (function call): . | date, . | format "%s"
-func parsePipeExpression(p *Parser) ast.Expression {
-	pipeExpr := &ast.PipeExpression{Token: p.curTok}
-
-	// We're already at the function name token. Accept IDENT or keyword tokens (e.g. "raw").
-	if p.curTok.Type != lexer.IDENT && !isKeywordUsableAsIdent(p.curTok.Type) {
-		p.errors = append(p.errors, fmt.Sprintf("expected identifier after pipe, got %s", p.curTok.Type))
-		return nil
-	}
-
-	// The identifier is the function name
-	pipeExpr.Function = &ast.Identifier{Token: p.curTok, Value: p.curTok.Literal}
-
-	// Parse optional arguments
-	for !p.peekTokIs(lexer.RBRACE_PCT) && !p.peekTokIs(lexer.EOF) && !p.peekTokIs(lexer.PIPE) {
-		p.nextToken()
-		arg := p.parseExpression(LOWEST)
-		if arg != nil {
-			pipeExpr.Arguments = append(pipeExpr.Arguments, arg)
+	// Sandbox: check allowed tags whitelist (skip internal close-tags like endif, endfor, etc.)
+	if p.allowedTags != nil && !isCloseTag(name) {
+		if !p.allowedTags[name] {
+			return nil, &wispyrrors.ParseError{
+				Line:    nameTok.Line,
+				Column:  nameTok.Col,
+				Message: fmt.Sprintf("sandbox: tag %q is not allowed", name),
+			}
 		}
 	}
 
-	return pipeExpr
+	switch name {
+	case "raw":
+		p.advance() // consume "raw"
+		if p.peek().Kind != lexer.TK_TAG_END {
+			return nil, p.errorf(p.peek().Line, p.peek().Col, "expected %%} after raw")
+		}
+		p.advance()
+		return p.consumeUntilEndraw(tagStart)
+
+	case "extends":
+		return p.parseExtends(tagStart)
+
+	case "block":
+		return p.parseBlock(tagStart)
+
+	case "if":
+		return p.parseIf(tagStart)
+
+	case "unless":
+		return p.parseUnless(tagStart)
+
+	case "for":
+		return p.parseFor(tagStart)
+
+	case "set":
+		return p.parseSet(tagStart)
+
+	case "with":
+		return p.parseWith(tagStart)
+
+	case "capture":
+		return p.parseCapture(tagStart)
+
+	case "macro":
+		return p.parseMacro(tagStart)
+
+	case "call":
+		return p.parseCall(tagStart)
+
+	case "include":
+		return p.parseInclude(tagStart)
+
+	case "render":
+		return p.parseRender(tagStart)
+
+	case "import":
+		if p.inline {
+			return nil, &wispyrrors.ParseError{
+				Line:    tagStart.Line,
+				Column:  tagStart.Col,
+				Message: "import not allowed in inline templates",
+			}
+		}
+		return p.parseImport(tagStart)
+
+	case "component":
+		if p.inline {
+			return nil, &wispyrrors.ParseError{
+				Line:    tagStart.Line,
+				Column:  tagStart.Col,
+				Message: "component not allowed in inline templates",
+			}
+		}
+		return p.parseComponent(tagStart)
+
+	case "slot":
+		return p.parseSlot(tagStart)
+
+	case "props":
+		return p.parseProps(tagStart)
+
+	case "asset":
+		if p.inline {
+			return nil, &wispyrrors.ParseError{
+				Line:    tagStart.Line,
+				Column:  tagStart.Col,
+				Message: "{% asset %} not allowed in inline templates",
+			}
+		}
+		return p.parseAsset(tagStart)
+
+	case "meta":
+		return p.parseMeta(tagStart)
+
+	case "hoist":
+		return p.parseHoist(tagStart)
+
+	default:
+		return p.consumeTagRemainder(name, tagStart)
+	}
 }
 
-// parseBodyStatements parses statements until a closing tag is found.
-// Returns the body block and the closing tag type (e.g. lexer.END, lexer.ELSE, lexer.ENDRAW, etc.).
-func (p *Parser) parseBodyStatements() (*ast.BlockStatement, lexer.TokenType) {
-	body := &ast.BlockStatement{Statements: []ast.Statement{}}
+// ─── {% if %} ─────────────────────────────────────────────────────────────────
 
-	p.nextToken()
+func (p *parser) parseIf(tagStart lexer.Token) (*ast.IfNode, error) {
+	p.advance() // consume "if" token
+	cond, err := p.parseExpr(0)
+	if err != nil {
+		return nil, err
+	}
+	if err := p.expectTagEnd(); err != nil {
+		return nil, err
+	}
+
+	node := &ast.IfNode{Condition: cond, Line: tagStart.Line}
+
+	// Parse body until elif/else/endif
+	node.Body, err = p.parseBody("elif", "else", "endif")
+	if err != nil {
+		return nil, err
+	}
+
+	// Parse elif/else chains
+	for {
+		tagName, _ := p.peekTagName()
+		if tagName == "elif" {
+			p.advance() // TAG_START
+			p.advance() // "elif"
+			elifCond, err := p.parseExpr(0)
+			if err != nil {
+				return nil, err
+			}
+			if err := p.expectTagEnd(); err != nil {
+				return nil, err
+			}
+			body, err := p.parseBody("elif", "else", "endif")
+			if err != nil {
+				return nil, err
+			}
+			node.Elifs = append(node.Elifs, ast.ElifClause{Condition: elifCond, Body: body})
+		} else if tagName == "else" {
+			p.advance() // TAG_START
+			p.advance() // "else"
+			if err := p.expectTagEnd(); err != nil {
+				return nil, err
+			}
+			node.Else, err = p.parseBody("endif")
+			if err != nil {
+				return nil, err
+			}
+			break
+		} else {
+			break
+		}
+	}
+
+	// Consume {% endif %}
+	if err := p.expectTag("endif"); err != nil {
+		return nil, err
+	}
+	return node, nil
+}
+
+// ─── {% unless %} ─────────────────────────────────────────────────────────────
+
+func (p *parser) parseUnless(tagStart lexer.Token) (*ast.UnlessNode, error) {
+	p.advance() // consume "unless"
+	cond, err := p.parseExpr(0)
+	if err != nil {
+		return nil, err
+	}
+	if err := p.expectTagEnd(); err != nil {
+		return nil, err
+	}
+	body, err := p.parseBody("endunless")
+	if err != nil {
+		return nil, err
+	}
+	if err := p.expectTag("endunless"); err != nil {
+		return nil, err
+	}
+	return &ast.UnlessNode{Condition: cond, Body: body, Line: tagStart.Line}, nil
+}
+
+// ─── {% for %} ────────────────────────────────────────────────────────────────
+
+func (p *parser) parseFor(tagStart lexer.Token) (*ast.ForNode, error) {
+	p.advance() // consume "for"
+
+	// Parse variable name(s)
+	var1Tok := p.advance()
+	if var1Tok.Kind != lexer.TK_IDENT {
+		return nil, p.errorf(var1Tok.Line, var1Tok.Col, "expected loop variable name after for")
+	}
+	var1 := var1Tok.Value
+
+	var var2 string
+	if p.peek().Kind == lexer.TK_COMMA {
+		p.advance() // consume comma
+		var2Tok := p.advance()
+		if var2Tok.Kind != lexer.TK_IDENT {
+			return nil, p.errorf(var2Tok.Line, var2Tok.Col, "expected second loop variable name after ,")
+		}
+		var2 = var2Tok.Value
+	}
+
+	// Expect "in"
+	inTok := p.advance()
+	if inTok.Kind != lexer.TK_IN {
+		return nil, p.errorf(inTok.Line, inTok.Col, "expected 'in' after loop variable(s)")
+	}
+
+	iterable, err := p.parseExpr(0)
+	if err != nil {
+		return nil, err
+	}
+	if err := p.expectTagEnd(); err != nil {
+		return nil, err
+	}
+
+	body, err := p.parseBody("empty", "endfor")
+	if err != nil {
+		return nil, err
+	}
+
+	var emptyBody []ast.Node
+	tagName, _ := p.peekTagName()
+	if tagName == "empty" {
+		p.advance() // TAG_START
+		p.advance() // "empty"
+		if err := p.expectTagEnd(); err != nil {
+			return nil, err
+		}
+		emptyBody, err = p.parseBody("endfor")
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	if err := p.expectTag("endfor"); err != nil {
+		return nil, err
+	}
+
+	return &ast.ForNode{
+		Var1:     var1,
+		Var2:     var2,
+		Iterable: iterable,
+		Body:     body,
+		Empty:    emptyBody,
+		Line:     tagStart.Line,
+	}, nil
+}
+
+// ─── {% set %} ────────────────────────────────────────────────────────────────
+
+func (p *parser) parseSet(tagStart lexer.Token) (*ast.SetNode, error) {
+	p.advance() // consume "set"
+	nameTok := p.advance()
+	if nameTok.Kind != lexer.TK_IDENT {
+		return nil, p.errorf(nameTok.Line, nameTok.Col, "expected variable name after set")
+	}
+	eqTok := p.advance()
+	if eqTok.Kind != lexer.TK_ASSIGN {
+		return nil, p.errorf(eqTok.Line, eqTok.Col, "expected = after variable name in set")
+	}
+	expr, err := p.parseExpr(0)
+	if err != nil {
+		return nil, err
+	}
+	if err := p.expectTagEnd(); err != nil {
+		return nil, err
+	}
+	return &ast.SetNode{Name: nameTok.Value, Expr: expr, Line: tagStart.Line}, nil
+}
+
+// ─── {% with %} ───────────────────────────────────────────────────────────────
+
+func (p *parser) parseWith(tagStart lexer.Token) (*ast.WithNode, error) {
+	p.advance() // consume "with"
+	if err := p.expectTagEnd(); err != nil {
+		return nil, err
+	}
+	body, err := p.parseBody("endwith")
+	if err != nil {
+		return nil, err
+	}
+	if err := p.expectTag("endwith"); err != nil {
+		return nil, err
+	}
+	return &ast.WithNode{Body: body, Line: tagStart.Line}, nil
+}
+
+// ─── {% capture %} ────────────────────────────────────────────────────────────
+
+func (p *parser) parseCapture(tagStart lexer.Token) (*ast.CaptureNode, error) {
+	p.advance() // consume "capture"
+	nameTok := p.advance()
+	if nameTok.Kind != lexer.TK_IDENT {
+		return nil, p.errorf(nameTok.Line, nameTok.Col, "expected variable name after capture")
+	}
+	if err := p.expectTagEnd(); err != nil {
+		return nil, err
+	}
+	body, err := p.parseBody("endcapture")
+	if err != nil {
+		return nil, err
+	}
+	if err := p.expectTag("endcapture"); err != nil {
+		return nil, err
+	}
+	return &ast.CaptureNode{Name: nameTok.Value, Body: body, Line: tagStart.Line}, nil
+}
+
+// ─── Expression parsing (Pratt) ───────────────────────────────────────────────
+
+func (p *parser) parseExpr(minPrec int) (ast.Node, error) {
+	left, err := p.parseUnary()
+	if err != nil {
+		return nil, err
+	}
 
 	for {
-		// Check for stop tokens that should NOT be in the body
-		switch p.curTok.Type {
-		case lexer.END, lexer.ELSE,
-			lexer.ENDRAW, lexer.ENDCOMMENT,
-			lexer.RETURN, lexer.FUNCTION,
-			lexer.EOF:
-			return body, p.curTok.Type
+		tk := p.peek()
+		prec, isInfix := infixPrec(tk.Kind)
+		if !isInfix || prec <= minPrec {
+			break
 		}
 
-		// Check for closing tags inside {% %} BEFORE calling parseStatement
-		if p.curTok.Type == lexer.LBRACE_PCT && isClosingTag(p.peekTok.Type) {
-			return body, p.peekTok.Type
-		}
+		switch tk.Kind {
+		case lexer.TK_IF:
+			p.advance() // consume if
+			cond, err := p.parseExpr(0)
+			if err != nil {
+				return nil, err
+			}
+			if p.peek().Kind != lexer.TK_ELSE {
+				return nil, p.errorf(p.peek().Line, p.peek().Col, "expected 'else' in ternary expression")
+			}
+			p.advance() // consume else
+			alt, err := p.parseExpr(0)
+			if err != nil {
+				return nil, err
+			}
+			left = &ast.TernaryExpr{
+				Condition:   cond,
+				Consequence: left,
+				Alternative: alt,
+				Line:        tk.Line,
+			}
 
-		stmt := p.parseStatement()
-		if stmt != nil {
-			// Check if this statement is an end/else statement (signals end of block)
-			// But when/elsif should be included in the body AND signal continuation
-			switch s := stmt.(type) {
-			case *ast.EndStatement, *ast.ElseStatement:
-				// Don't add to body - advance past closing %} and return
-				p.nextToken()
-				return body, p.curTok.Type
-			case *ast.ElsifStatement, *ast.WhenStatement:
-				// Add to body but also return the type so the caller knows what came next.
-				// Do NOT advance here — leave curTok at the %} of the elsif/when tag so
-				// callers can call parseBodyStatements() again and let it advance naturally.
-				body.Statements = append(body.Statements, s)
-				switch s.(type) {
-				case *ast.ElsifStatement:
-					return body, lexer.ELSIF
-				case *ast.WhenStatement:
-					return body, lexer.WHEN
+		case lexer.TK_PIPE:
+			p.advance() // consume |
+			left, err = p.parseFilter(left)
+			if err != nil {
+				return nil, err
+			}
+
+		case lexer.TK_DOT:
+			p.advance() // consume .
+			attr := p.peek()
+			if attr.Kind != lexer.TK_IDENT {
+				return nil, p.errorf(attr.Line, attr.Col, "expected attribute name after .")
+			}
+			p.advance()
+			left = &ast.AttributeAccess{Object: left, Key: attr.Value, Line: attr.Line}
+
+		case lexer.TK_LBRACKET:
+			p.advance() // consume [
+			idx, err := p.parseExpr(0)
+			if err != nil {
+				return nil, err
+			}
+			if p.peek().Kind != lexer.TK_RBRACKET {
+				return nil, p.errorf(p.peek().Line, p.peek().Col, "expected ]")
+			}
+			p.advance()
+			left = &ast.IndexAccess{Object: left, Key: idx, Line: tk.Line}
+
+		case lexer.TK_LPAREN:
+			// Function/macro call: identifier(args...) or obj.method(args...)
+			p.advance() // consume (
+			posArgs, namedArgs, err := p.parseCallArgs()
+			if err != nil {
+				return nil, err
+			}
+			// Distinguish built-in functions from macro calls
+			if ident, ok := left.(*ast.Identifier); ok {
+				switch ident.Name {
+				case "range":
+					if len(namedArgs) > 0 {
+						return nil, p.errorf(tk.Line, tk.Col, "range() does not accept named arguments")
+					}
+					left = &ast.FuncCallNode{Name: "range", Args: posArgs, Line: ident.Line}
+				case "caller":
+					if len(posArgs)+len(namedArgs) > 0 {
+						return nil, p.errorf(tk.Line, tk.Col, "caller() takes no arguments")
+					}
+					left = &ast.FuncCallNode{Name: "caller", Args: nil, Line: ident.Line}
+				case "super":
+					if len(posArgs)+len(namedArgs) > 0 {
+						return nil, p.errorf(tk.Line, tk.Col, "super() takes no arguments")
+					}
+					left = &ast.FuncCallNode{Name: "super", Args: nil, Line: ident.Line}
+				default:
+					left = &ast.MacroCallExpr{Callee: left, PosArgs: posArgs, NamedArgs: namedArgs, Line: ident.Line}
+				}
+			} else {
+				// AttributeAccess callee: forms.input(...)
+				left = &ast.MacroCallExpr{Callee: left, PosArgs: posArgs, NamedArgs: namedArgs, Line: tk.Line}
+			}
+
+		default:
+			p.advance()
+			right, err := p.parseExpr(prec)
+			if err != nil {
+				return nil, err
+			}
+			left = &ast.BinaryExpr{Op: tk.Value, Left: left, Right: right, Line: tk.Line}
+		}
+	}
+	return left, nil
+}
+
+func (p *parser) parseUnary() (ast.Node, error) {
+	tk := p.peek()
+	switch tk.Kind {
+	case lexer.TK_NOT:
+		p.advance()
+		// not has precedence 30 (below comparisons at 40, above and/or) so
+		// parse the operand at prec=30 to allow postfix operators like .attr and [idx]
+		operand, err := p.parseExpr(30)
+		if err != nil {
+			return nil, err
+		}
+		return &ast.UnaryExpr{Op: "not", Operand: operand, Line: tk.Line}, nil
+	case lexer.TK_MINUS:
+		p.advance()
+		// unary minus binds tighter than binary ops; use prec=70 (same as * / %)
+		operand, err := p.parseExpr(70)
+		if err != nil {
+			return nil, err
+		}
+		return &ast.UnaryExpr{Op: "-", Operand: operand, Line: tk.Line}, nil
+	}
+	return p.parsePrimary()
+}
+
+func (p *parser) parsePrimary() (ast.Node, error) {
+	tk := p.advance()
+	switch tk.Kind {
+	case lexer.TK_NIL:
+		return &ast.NilLiteral{Line: tk.Line}, nil
+	case lexer.TK_TRUE:
+		return &ast.BoolLiteral{Value: true, Line: tk.Line}, nil
+	case lexer.TK_FALSE:
+		return &ast.BoolLiteral{Value: false, Line: tk.Line}, nil
+	case lexer.TK_STRING:
+		return &ast.StringLiteral{Value: tk.Value, Line: tk.Line}, nil
+	case lexer.TK_INT:
+		n, err := strconv.ParseInt(tk.Value, 10, 64)
+		if err != nil {
+			return nil, p.errorf(tk.Line, tk.Col, "invalid integer: %s", tk.Value)
+		}
+		return &ast.IntLiteral{Value: n, Line: tk.Line}, nil
+	case lexer.TK_FLOAT:
+		f, err := strconv.ParseFloat(tk.Value, 64)
+		if err != nil {
+			return nil, p.errorf(tk.Line, tk.Col, "invalid float: %s", tk.Value)
+		}
+		return &ast.FloatLiteral{Value: f, Line: tk.Line}, nil
+	case lexer.TK_IDENT:
+		return &ast.Identifier{Name: tk.Value, Line: tk.Line}, nil
+	case lexer.TK_LPAREN:
+		expr, err := p.parseExpr(0)
+		if err != nil {
+			return nil, err
+		}
+		if p.peek().Kind != lexer.TK_RPAREN {
+			return nil, p.errorf(p.peek().Line, p.peek().Col, "expected )")
+		}
+		p.advance()
+		return expr, nil
+	default:
+		return nil, p.errorf(tk.Line, tk.Col, "unexpected token in expression: %q", tk.Value)
+	}
+}
+
+func (p *parser) parseFilter(value ast.Node) (ast.Node, error) {
+	name := p.peek()
+	if name.Kind != lexer.TK_IDENT {
+		return nil, p.errorf(name.Line, name.Col, "expected filter name after |")
+	}
+	p.advance()
+
+	var args []ast.Node
+	if p.peek().Kind == lexer.TK_LPAREN {
+		p.advance() // consume (
+		for p.peek().Kind != lexer.TK_RPAREN && !p.atEOF() {
+			arg, err := p.parseExpr(0)
+			if err != nil {
+				return nil, err
+			}
+			args = append(args, arg)
+			if p.peek().Kind == lexer.TK_COMMA {
+				p.advance()
+			}
+		}
+		if p.peek().Kind != lexer.TK_RPAREN {
+			return nil, p.errorf(p.peek().Line, p.peek().Col, "expected ) after filter arguments")
+		}
+		p.advance()
+	}
+
+	return &ast.FilterExpr{
+		Value:  value,
+		Filter: name.Value,
+		Args:   args,
+		Line:   name.Line,
+	}, nil
+}
+
+func infixPrec(k lexer.TokenKind) (int, bool) {
+	switch k {
+	case lexer.TK_IF:
+		return 5, true
+	case lexer.TK_OR:
+		return 10, true
+	case lexer.TK_AND:
+		return 20, true
+	case lexer.TK_EQ, lexer.TK_NEQ, lexer.TK_LT, lexer.TK_LTE, lexer.TK_GT, lexer.TK_GTE:
+		return 40, true
+	case lexer.TK_TILDE:
+		return 50, true
+	case lexer.TK_PLUS, lexer.TK_MINUS:
+		return 60, true
+	case lexer.TK_STAR, lexer.TK_SLASH, lexer.TK_PERCENT:
+		return 70, true
+	case lexer.TK_PIPE:
+		return 90, true
+	case lexer.TK_DOT, lexer.TK_LBRACKET, lexer.TK_LPAREN:
+		return 100, true
+	}
+	return 0, false
+}
+
+// ─── Tag helpers ──────────────────────────────────────────────────────────────
+
+// consumeTagRemainder skips to TAG_END and emits a TagNode.
+func (p *parser) consumeTagRemainder(name string, tagStart lexer.Token) (ast.Node, error) {
+	p.advance() // consume tag name
+	for p.peek().Kind != lexer.TK_TAG_END && !p.atEOF() {
+		p.advance()
+	}
+	if p.peek().Kind == lexer.TK_TAG_END {
+		p.advance()
+	}
+	return &ast.TagNode{Name: name, Line: tagStart.Line}, nil
+}
+
+func (p *parser) consumeUntilEndraw(tagStart lexer.Token) (ast.Node, error) {
+	var content string
+	for !p.atEOF() {
+		tk := p.peek()
+		if tk.Kind == lexer.TK_TAG_START {
+			if p.pos+1 < len(p.tokens) && p.tokens[p.pos+1].Kind == lexer.TK_IDENT &&
+				p.tokens[p.pos+1].Value == "endraw" {
+				p.advance()
+				p.advance()
+				if p.peek().Kind == lexer.TK_TAG_END {
+					p.advance()
+				}
+				return &ast.RawNode{Value: content, Line: tagStart.Line}, nil
+			}
+		}
+		if tk.Kind == lexer.TK_TEXT {
+			content += tk.Value
+		}
+		p.advance()
+	}
+	return nil, p.errorf(tagStart.Line, tagStart.Col, "unclosed raw block")
+}
+
+// expectTagEnd consumes the closing %} of the current tag.
+func (p *parser) expectTagEnd() error {
+	if p.peek().Kind != lexer.TK_TAG_END {
+		return p.errorf(p.peek().Line, p.peek().Col, "expected %%} got %q", p.peek().Value)
+	}
+	p.advance()
+	return nil
+}
+
+// expectTag consumes a full {% name %} tag and errors if name doesn't match.
+func (p *parser) expectTag(name string) error {
+	if p.peek().Kind != lexer.TK_TAG_START {
+		return p.errorf(p.peek().Line, p.peek().Col, "expected {%% %s %%}", name)
+	}
+	p.advance() // TAG_START
+	tok := p.peek()
+	tokName, ok := tokenTagName(tok)
+	if !ok || tokName != name {
+		return p.errorf(tok.Line, tok.Col, "expected tag %q, got %q", name, tok.Value)
+	}
+	p.advance() // tag name
+	// skip any remaining tokens until TAG_END (handles end tags with no content)
+	for p.peek().Kind != lexer.TK_TAG_END && !p.atEOF() {
+		p.advance()
+	}
+	if p.peek().Kind == lexer.TK_TAG_END {
+		p.advance()
+	}
+	return nil
+}
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+func (p *parser) peek() lexer.Token {
+	if p.pos < len(p.tokens) {
+		return p.tokens[p.pos]
+	}
+	return lexer.Token{Kind: lexer.TK_EOF}
+}
+
+func (p *parser) advance() lexer.Token {
+	tk := p.peek()
+	if p.pos < len(p.tokens) {
+		p.pos++
+	}
+	return tk
+}
+
+func (p *parser) atEOF() bool {
+	return p.pos >= len(p.tokens) || p.tokens[p.pos].Kind == lexer.TK_EOF
+}
+
+func (p *parser) errorf(line, col int, format string, args ...any) *wispyrrors.ParseError {
+	return &wispyrrors.ParseError{
+		Line:    line,
+		Column:  col,
+		Message: fmt.Sprintf(format, args...),
+	}
+}
+
+// isCloseTag returns true for closing/structural tags that should bypass the allowed-tags check.
+// These are tags that are always needed as syntactic closers (e.g. endif, endfor, else, etc.).
+func isCloseTag(name string) bool {
+	switch name {
+	case "endif", "endfor", "endunless", "endwith", "endcapture", "endmacro", "endcall",
+		"endblock", "endslot", "endcomponent", "endfill", "endhoist",
+		"else", "elif", "empty", "endraw":
+		return true
+	}
+	return false
+}
+
+// ─── Plan 4: Macro + composition parser methods ───────────────────────────────
+
+// parseCallArgs parses the argument list inside ( ) of a macro/function call.
+// Returns positional args (in order) and named args (key=value).
+// Positional args must come before named args.
+func (p *parser) parseCallArgs() (posArgs []ast.Node, namedArgs []ast.NamedArgNode, err error) {
+	for p.peek().Kind != lexer.TK_RPAREN && !p.atEOF() {
+		// Named arg: ident = expr (look-ahead two tokens)
+		if p.peek().Kind == lexer.TK_IDENT &&
+			p.pos+1 < len(p.tokens) &&
+			p.tokens[p.pos+1].Kind == lexer.TK_ASSIGN {
+			keyTok := p.advance() // consume ident
+			p.advance()           // consume =
+			val, e := p.parseExpr(0)
+			if e != nil {
+				return nil, nil, e
+			}
+			namedArgs = append(namedArgs, ast.NamedArgNode{Key: keyTok.Value, Value: val, Line: keyTok.Line})
+		} else {
+			if len(namedArgs) > 0 {
+				return nil, nil, p.errorf(p.peek().Line, p.peek().Col, "positional argument after named argument")
+			}
+			arg, e := p.parseExpr(0)
+			if e != nil {
+				return nil, nil, e
+			}
+			posArgs = append(posArgs, arg)
+		}
+		if p.peek().Kind == lexer.TK_COMMA {
+			p.advance()
+		}
+	}
+	if p.peek().Kind != lexer.TK_RPAREN {
+		return nil, nil, p.errorf(p.peek().Line, p.peek().Col, "expected ) after arguments")
+	}
+	p.advance() // consume )
+	return posArgs, namedArgs, nil
+}
+
+// parseMacroParams parses the parameter list of a macro definition: (p1, p2="default")
+func (p *parser) parseMacroParams() ([]ast.MacroParam, error) {
+	if p.peek().Kind != lexer.TK_LPAREN {
+		return nil, p.errorf(p.peek().Line, p.peek().Col, "expected ( after macro name")
+	}
+	p.advance() // consume (
+	var params []ast.MacroParam
+	for p.peek().Kind != lexer.TK_RPAREN && !p.atEOF() {
+		nameTok := p.advance()
+		if nameTok.Kind != lexer.TK_IDENT {
+			return nil, p.errorf(nameTok.Line, nameTok.Col, "expected parameter name in macro definition")
+		}
+		param := ast.MacroParam{Name: nameTok.Value}
+		if p.peek().Kind == lexer.TK_ASSIGN {
+			p.advance() // consume =
+			def, err := p.parseExpr(0)
+			if err != nil {
+				return nil, err
+			}
+			param.Default = def
+		}
+		params = append(params, param)
+		if p.peek().Kind == lexer.TK_COMMA {
+			p.advance()
+		}
+	}
+	if p.peek().Kind != lexer.TK_RPAREN {
+		return nil, p.errorf(p.peek().Line, p.peek().Col, "expected ) after macro parameters")
+	}
+	p.advance() // consume )
+	return params, nil
+}
+
+// parseMacro parses {% macro name(params) %}...{% endmacro %}.
+func (p *parser) parseMacro(tagStart lexer.Token) (*ast.MacroNode, error) {
+	p.advance() // consume "macro"
+	nameTok := p.advance()
+	if nameTok.Kind != lexer.TK_IDENT {
+		return nil, p.errorf(nameTok.Line, nameTok.Col, "expected macro name after macro")
+	}
+	params, err := p.parseMacroParams()
+	if err != nil {
+		return nil, err
+	}
+	if err := p.expectTagEnd(); err != nil {
+		return nil, err
+	}
+	body, err := p.parseBody("endmacro")
+	if err != nil {
+		return nil, err
+	}
+	if err := p.expectTag("endmacro"); err != nil {
+		return nil, err
+	}
+	return &ast.MacroNode{Name: nameTok.Value, Params: params, Body: body, Line: tagStart.Line}, nil
+}
+
+// parseCall parses {% call macro(args) %}body{% endcall %}.
+func (p *parser) parseCall(tagStart lexer.Token) (*ast.CallNode, error) {
+	p.advance() // consume "call"
+	callee, err := p.parseExpr(90)
+	if err != nil {
+		return nil, err
+	}
+	mc, ok := callee.(*ast.MacroCallExpr)
+	if !ok {
+		return nil, p.errorf(tagStart.Line, tagStart.Col, "{%% call %%} requires a macro call expression, e.g. {%% call myMacro(args) %%}")
+	}
+	if err := p.expectTagEnd(); err != nil {
+		return nil, err
+	}
+	body, err := p.parseBody("endcall")
+	if err != nil {
+		return nil, err
+	}
+	if err := p.expectTag("endcall"); err != nil {
+		return nil, err
+	}
+	return &ast.CallNode{
+		Callee:    mc.Callee,
+		PosArgs:   mc.PosArgs,
+		NamedArgs: mc.NamedArgs,
+		Body:      body,
+		Line:      tagStart.Line,
+	}, nil
+}
+
+// parseWithVars parses an optional "with key=val, key2=val2" clause.
+// Stops at tag end or "isolated" keyword.
+func (p *parser) parseWithVars() ([]ast.NamedArgNode, error) {
+	if p.peek().Kind != lexer.TK_IDENT || p.peek().Value != "with" {
+		return nil, nil
+	}
+	p.advance() // consume "with"
+	var vars []ast.NamedArgNode
+	for p.peek().Kind != lexer.TK_TAG_END && !p.atEOF() {
+		if p.peek().Kind == lexer.TK_IDENT && p.peek().Value == "isolated" {
+			break
+		}
+		keyTok := p.advance()
+		if keyTok.Kind != lexer.TK_IDENT {
+			return nil, p.errorf(keyTok.Line, keyTok.Col, "expected variable name in with clause")
+		}
+		if p.peek().Kind != lexer.TK_ASSIGN {
+			return nil, p.errorf(p.peek().Line, p.peek().Col, "expected = after variable name in with clause")
+		}
+		p.advance() // consume =
+		val, err := p.parseExpr(0)
+		if err != nil {
+			return nil, err
+		}
+		vars = append(vars, ast.NamedArgNode{Key: keyTok.Value, Value: val, Line: keyTok.Line})
+		if p.peek().Kind == lexer.TK_COMMA {
+			p.advance()
+		}
+	}
+	return vars, nil
+}
+
+// parseInclude parses {% include "name" [with k=v, ...] [isolated] %}.
+func (p *parser) parseInclude(tagStart lexer.Token) (*ast.IncludeNode, error) {
+	p.advance() // consume "include"
+	nameTok := p.advance()
+	if nameTok.Kind != lexer.TK_STRING {
+		return nil, p.errorf(nameTok.Line, nameTok.Col, "expected quoted template name after include")
+	}
+	withVars, err := p.parseWithVars()
+	if err != nil {
+		return nil, err
+	}
+	isolated := false
+	if p.peek().Kind == lexer.TK_IDENT && p.peek().Value == "isolated" {
+		p.advance()
+		isolated = true
+	}
+	if err := p.expectTagEnd(); err != nil {
+		return nil, err
+	}
+	return &ast.IncludeNode{Name: nameTok.Value, WithVars: withVars, Isolated: isolated, Line: tagStart.Line}, nil
+}
+
+// parseRender parses {% render "name" [with k=v, ...] %} — always isolated.
+func (p *parser) parseRender(tagStart lexer.Token) (*ast.RenderNode, error) {
+	p.advance() // consume "render"
+	nameTok := p.advance()
+	if nameTok.Kind != lexer.TK_STRING {
+		return nil, p.errorf(nameTok.Line, nameTok.Col, "expected quoted template name after render")
+	}
+	withVars, err := p.parseWithVars()
+	if err != nil {
+		return nil, err
+	}
+	if err := p.expectTagEnd(); err != nil {
+		return nil, err
+	}
+	return &ast.RenderNode{Name: nameTok.Value, WithVars: withVars, Line: tagStart.Line}, nil
+}
+
+// parseImport parses {% import "name" as alias %}.
+func (p *parser) parseImport(tagStart lexer.Token) (*ast.ImportNode, error) {
+	p.advance() // consume "import"
+	nameTok := p.advance()
+	if nameTok.Kind != lexer.TK_STRING {
+		return nil, p.errorf(nameTok.Line, nameTok.Col, "expected quoted template name after import")
+	}
+	asTok := p.advance()
+	if asTok.Kind != lexer.TK_IDENT || asTok.Value != "as" {
+		return nil, p.errorf(asTok.Line, asTok.Col, "expected 'as' after template name in import")
+	}
+	aliasTok := p.advance()
+	if aliasTok.Kind != lexer.TK_IDENT {
+		return nil, p.errorf(aliasTok.Line, aliasTok.Col, "expected alias name after 'as' in import")
+	}
+	if err := p.expectTagEnd(); err != nil {
+		return nil, err
+	}
+	return &ast.ImportNode{Name: nameTok.Value, Alias: aliasTok.Value, Line: tagStart.Line}, nil
+}
+
+// ─── Plan 5: Layout inheritance parser methods ────────────────────────────────
+
+// parseExtends parses {% extends "name" %}.
+// Inline templates may not use extends.
+func (p *parser) parseExtends(tagStart lexer.Token) (*ast.ExtendsNode, error) {
+	if p.inline {
+		return nil, &wispyrrors.ParseError{
+			Line:    tagStart.Line,
+			Column:  tagStart.Col,
+			Message: "extends not allowed in inline templates",
+		}
+	}
+	p.advance() // consume "extends"
+	nameTok := p.advance()
+	if nameTok.Kind != lexer.TK_STRING {
+		return nil, p.errorf(nameTok.Line, nameTok.Col, "expected quoted template name after extends")
+	}
+	if err := p.expectTagEnd(); err != nil {
+		return nil, err
+	}
+	return &ast.ExtendsNode{Name: nameTok.Value, Line: tagStart.Line}, nil
+}
+
+// parseBlock parses {% block name %}...{% endblock %}.
+func (p *parser) parseBlock(tagStart lexer.Token) (*ast.BlockNode, error) {
+	p.advance() // consume "block"
+	nameTok := p.advance()
+	if nameTok.Kind != lexer.TK_IDENT {
+		return nil, p.errorf(nameTok.Line, nameTok.Col, "expected block name after block")
+	}
+	if err := p.expectTagEnd(); err != nil {
+		return nil, err
+	}
+	body, err := p.parseBody("endblock")
+	if err != nil {
+		return nil, err
+	}
+	if err := p.expectTag("endblock"); err != nil {
+		return nil, err
+	}
+	return &ast.BlockNode{Name: nameTok.Value, Body: body, Line: tagStart.Line}, nil
+}
+
+// ─── Plan 6: Component + Slots parser methods ─────────────────────────────────
+
+// parsePropsParams parses a props parameter list: name, name2="default", ...
+// Like parseMacroParams but no surrounding parens; loops until TK_TAG_END.
+func (p *parser) parsePropsParams() ([]ast.MacroParam, error) {
+	var params []ast.MacroParam
+	for p.peek().Kind != lexer.TK_TAG_END && !p.atEOF() {
+		nameTok := p.advance()
+		if nameTok.Kind != lexer.TK_IDENT {
+			return nil, p.errorf(nameTok.Line, nameTok.Col, "expected parameter name in props declaration")
+		}
+		param := ast.MacroParam{Name: nameTok.Value}
+		if p.peek().Kind == lexer.TK_ASSIGN {
+			p.advance() // consume =
+			def, err := p.parseExpr(0)
+			if err != nil {
+				return nil, err
+			}
+			param.Default = def
+		}
+		params = append(params, param)
+		if p.peek().Kind == lexer.TK_COMMA {
+			p.advance()
+		}
+	}
+	return params, nil
+}
+
+// parseProps parses {% props name, name2="default", ... %}.
+func (p *parser) parseProps(tagStart lexer.Token) (*ast.PropsNode, error) {
+	p.advance() // consume "props"
+	params, err := p.parsePropsParams()
+	if err != nil {
+		return nil, err
+	}
+	if err := p.expectTagEnd(); err != nil {
+		return nil, err
+	}
+	return &ast.PropsNode{Params: params, Line: tagStart.Line}, nil
+}
+
+// parseSlot parses {% slot ["name"] %}...{% endslot %}.
+func (p *parser) parseSlot(tagStart lexer.Token) (*ast.SlotNode, error) {
+	p.advance() // consume "slot"
+	name := ""
+	if p.peek().Kind == lexer.TK_STRING {
+		name = p.advance().Value
+	}
+	if err := p.expectTagEnd(); err != nil {
+		return nil, err
+	}
+	body, err := p.parseBody("endslot")
+	if err != nil {
+		return nil, err
+	}
+	if err := p.expectTag("endslot"); err != nil {
+		return nil, err
+	}
+	return &ast.SlotNode{Name: name, Default: body, Line: tagStart.Line}, nil
+}
+
+// parseComponent parses {% component "name" k=v, ... %}...{% endcomponent %}.
+// The body is scanned to separate {% fill %} blocks from default-slot content.
+func (p *parser) parseComponent(tagStart lexer.Token) (*ast.ComponentNode, error) {
+	p.advance() // consume "component"
+	nameTok := p.advance()
+	if nameTok.Kind != lexer.TK_STRING {
+		return nil, p.errorf(nameTok.Line, nameTok.Col, "expected quoted template name after component")
+	}
+
+	// Parse props: key=val key2=val2 (until TAG_END)
+	var props []ast.NamedArgNode
+	for p.peek().Kind != lexer.TK_TAG_END && !p.atEOF() {
+		keyTok := p.advance()
+		if keyTok.Kind != lexer.TK_IDENT {
+			return nil, p.errorf(keyTok.Line, keyTok.Col, "expected prop name in component tag")
+		}
+		if p.peek().Kind != lexer.TK_ASSIGN {
+			return nil, p.errorf(p.peek().Line, p.peek().Col, "expected = after prop name")
+		}
+		p.advance() // consume =
+		val, err := p.parseExpr(0)
+		if err != nil {
+			return nil, err
+		}
+		props = append(props, ast.NamedArgNode{Key: keyTok.Value, Value: val, Line: keyTok.Line})
+		if p.peek().Kind == lexer.TK_COMMA {
+			p.advance()
+		}
+	}
+	if err := p.expectTagEnd(); err != nil {
+		return nil, err
+	}
+
+	// Parse body: separate {% fill %} from default-slot content
+	node := &ast.ComponentNode{Name: nameTok.Value, Props: props, Line: tagStart.Line}
+	if err := p.parseComponentBody(node); err != nil {
+		return nil, err
+	}
+	return node, nil
+}
+
+// parseComponentBody parses until {% endcomponent %}, routing {% fill %} blocks
+// into node.Fills and everything else into node.DefaultFill.
+func (p *parser) parseComponentBody(node *ast.ComponentNode) error {
+	for !p.atEOF() {
+		if p.peek().Kind == lexer.TK_TAG_START {
+			tagName, ok := p.peekTagName()
+			if ok {
+				switch tagName {
+				case "endcomponent":
+					return p.expectTag("endcomponent")
+				case "fill":
+					fill, err := p.parseFill()
+					if err != nil {
+						return err
+					}
+					node.Fills = append(node.Fills, *fill)
+					continue
+				}
+			}
+		}
+		n, err := p.parseNode()
+		if err != nil {
+			return err
+		}
+		if n != nil {
+			node.DefaultFill = append(node.DefaultFill, n)
+		}
+	}
+	return p.errorf(p.peek().Line, p.peek().Col, "unclosed component block — expected endcomponent")
+}
+
+// parseFill parses {% fill "name" %}...{% endfill %}.
+// Called when positioned AT TK_TAG_START.
+func (p *parser) parseFill() (*ast.FillNode, error) {
+	tagStart := p.peek()
+	p.advance() // consume {%
+	p.advance() // consume "fill"
+	nameTok := p.advance()
+	if nameTok.Kind != lexer.TK_STRING {
+		return nil, p.errorf(nameTok.Line, nameTok.Col, "expected quoted slot name after fill")
+	}
+	if err := p.expectTagEnd(); err != nil {
+		return nil, err
+	}
+	body, err := p.parseBody("endfill")
+	if err != nil {
+		return nil, err
+	}
+	if err := p.expectTag("endfill"); err != nil {
+		return nil, err
+	}
+	return &ast.FillNode{Name: nameTok.Value, Body: body, Line: tagStart.Line}, nil
+}
+
+// ─── Plan 7: Web primitives parser methods ────────────────────────────────────
+
+// parseAsset parses {% asset "src" type="stylesheet" [k=v | bareIdent]* [priority=N] %}.
+// Bare idents (no = after them) are treated as boolean attributes (value = "").
+func (p *parser) parseAsset(tagStart lexer.Token) (*ast.AssetNode, error) {
+	p.advance() // consume "asset"
+	srcTok := p.advance()
+	if srcTok.Kind != lexer.TK_STRING {
+		return nil, p.errorf(srcTok.Line, srcTok.Col, "expected quoted asset src after asset")
+	}
+
+	node := &ast.AssetNode{Src: srcTok.Value, Line: tagStart.Line}
+
+	for p.peek().Kind != lexer.TK_TAG_END && !p.atEOF() {
+		keyTok := p.advance()
+		if keyTok.Kind != lexer.TK_IDENT {
+			return nil, p.errorf(keyTok.Line, keyTok.Col, "expected attribute name in asset tag")
+		}
+		key := keyTok.Value
+
+		// Check for = (value attr) or no = (boolean attr)
+		if p.peek().Kind == lexer.TK_ASSIGN {
+			p.advance() // consume =
+			val, err := p.parseExpr(0)
+			if err != nil {
+				return nil, err
+			}
+			switch key {
+			case "type":
+				// type must be a string literal
+				if sl, ok := val.(*ast.StringLiteral); ok {
+					node.AssetType = sl.Value
+				} else {
+					return nil, p.errorf(keyTok.Line, keyTok.Col, "asset type= must be a string literal")
+				}
+			case "priority":
+				// priority must be an integer literal
+				if il, ok := val.(*ast.IntLiteral); ok {
+					node.Priority = int(il.Value)
+				} else {
+					return nil, p.errorf(keyTok.Line, keyTok.Col, "asset priority= must be an integer literal")
 				}
 			default:
-				// Skip empty text content
-				if tc, ok := stmt.(*ast.TextContent); ok && tc.Value == "" {
-					// skip
-				} else {
-					body.Statements = append(body.Statements, stmt)
-				}
+				node.Attrs = append(node.Attrs, ast.NamedArgNode{Key: key, Value: val, Line: keyTok.Line})
 			}
+		} else {
+			// Boolean attr: bare ident → value = ""
+			node.Attrs = append(node.Attrs, ast.NamedArgNode{
+				Key:   key,
+				Value: &ast.StringLiteral{Value: "", Line: keyTok.Line},
+				Line:  keyTok.Line,
+			})
 		}
-		p.nextToken()
 	}
+
+	return node, p.expectTagEnd()
 }
 
-// isClosingTag checks if a token type is a closing tag keyword.
-func isClosingTag(t lexer.TokenType) bool {
-	switch t {
-	case lexer.END, lexer.ELSE,
-		lexer.ENDRAW, lexer.ENDCOMMENT:
-		return true
+// parseMeta parses {% meta name="key" content="val" %} (or property=, http-equiv=).
+// The metadata key is derived from the value of the name=, property=, or http-equiv= attribute.
+func (p *parser) parseMeta(tagStart lexer.Token) (*ast.MetaNode, error) {
+	p.advance() // consume "meta"
+
+	var metaKey, metaContent string
+	for p.peek().Kind != lexer.TK_TAG_END && !p.atEOF() {
+		keyTok := p.advance()
+		if keyTok.Kind != lexer.TK_IDENT {
+			return nil, p.errorf(keyTok.Line, keyTok.Col, "expected attribute name in meta tag")
+		}
+		if p.peek().Kind != lexer.TK_ASSIGN {
+			return nil, p.errorf(p.peek().Line, p.peek().Col, "expected = after %q in meta tag", keyTok.Value)
+		}
+		p.advance() // consume =
+		valTok := p.advance()
+		if valTok.Kind != lexer.TK_STRING {
+			return nil, p.errorf(valTok.Line, valTok.Col, "meta attribute values must be string literals")
+		}
+		switch keyTok.Value {
+		case "name", "property", "http-equiv":
+			metaKey = valTok.Value
+		case "content":
+			metaContent = valTok.Value
+		}
+		// ignore unknown attrs silently
 	}
-	return false
+
+	if metaKey == "" {
+		return nil, p.errorf(tagStart.Line, tagStart.Col, "meta tag requires name=, property=, or http-equiv= attribute")
+	}
+	return &ast.MetaNode{Key: metaKey, Value: metaContent, Line: tagStart.Line}, p.expectTagEnd()
 }
 
-// consumeEndTag consumes the {% end %} or {% endraw %} or {% endcomment %} tag.
-func (p *Parser) consumeEndTag() bool {
-	// Handle case where curTok is at the closing keyword directly
-	if p.curTokIs(lexer.END) || p.curTokIs(lexer.ENDRAW) || p.curTokIs(lexer.ENDCOMMENT) {
-		p.nextToken() // consume keyword, now at RBRACE_PCT
-		return true
-	}
+// parseHoist parses {% hoist target="name" %}...{% endhoist %}.
+func (p *parser) parseHoist(tagStart lexer.Token) (*ast.HoistNode, error) {
+	p.advance() // consume "hoist"
 
-	// Handle case where curTok is at LBRACE_PCT and peek is the closing keyword
-	if p.curTokIs(lexer.LBRACE_PCT) && isClosingTag(p.peekTok.Type) {
-		p.nextToken() // consume LBRACE_PCT, now at closing keyword
-		p.nextToken() // consume keyword, now at RBRACE_PCT
-		return true
-	}
-
-	return false
-}
-
-// parseWispStatement parses a Wisp statement inside {% %}.
-func (p *Parser) parseWispStatement() ast.Statement {
-	// We're at LBRACE_PCT, now look at what's inside
-	p.nextToken() // move past {%
-
-	// Check what type of statement this is
-	switch p.curTok.Type {
-	case lexer.DOT:
-		// Variable access or assignment: {% .name %} or {% .name = value %}
-		return p.parseWispVariableStatement()
-	case lexer.IF:
-		// Conditional: {% if .condition %}
-		return p.parseWispIfStatement()
-	case lexer.UNLESS:
-		// Negated conditional: {% unless .condition %}
-		return p.parseWispUnlessStatement()
-	case lexer.ASSIGN:
-		// Variable assignment: {% assign .name = value %}
-		return p.parseWispAssignStatement()
-	case lexer.FOR:
-		// Loop: {% for .item in .items %}
-		return p.parseWispForStatement()
-	case lexer.WHILE:
-		// Conditional loop: {% while .condition %}
-		return p.parseWispWhileStatement()
-	case lexer.RANGE:
-		// Range loop: {% range .start .end %}
-		return p.parseWispRangeStatement()
-	case lexer.CASE:
-		// Switch statement: {% case .value %}
-		return p.parseWispCaseStatement()
-	case lexer.WITH:
-		// Context block: {% with .user as .currentUser %}
-		return p.parseWispWithStatement()
-	case lexer.CYCLE:
-		// Cycle tag: {% cycle 'odd' 'even' %}
-		return p.parseWispCycleStatement()
-	case lexer.INCREMENT:
-		// Increment tag: {% increment .counter %}
-		return p.parseWispIncrementStatement()
-	case lexer.DECREMENT:
-		// Decrement tag: {% decrement .counter %}
-		return p.parseWispDecrementStatement()
-	case lexer.BREAK:
-		// Break tag: {% break %}
-		p.expectPeek(lexer.RBRACE_PCT)
-		return &ast.BreakStatement{Token: p.curTok}
-	case lexer.CONTINUE:
-		// Continue tag: {% continue %}
-		p.expectPeek(lexer.RBRACE_PCT)
-		return &ast.ContinueStatement{Token: p.curTok}
-	case lexer.INCLUDE:
-		// Include tag: {% include "template" %}
-		return p.parseWispIncludeStatement()
-	case lexer.RENDER:
-		// Render tag: {% render "template" .data %}
-		return p.parseWispRenderStatement()
-	case lexer.COMPONENT:
-		// Component tag: {% component "Button" .props %}
-		return p.parseWispComponentStatement()
-	case lexer.EXTENDS:
-		// Extends tag: {% extends "layout" %}
-		return p.parseWispExtendsStatement()
-	case lexer.BLOCK:
-		// Block tag: {% block name %}
-		return p.parseWispBlockStatement()
-	case lexer.CONTENT:
-		// Content tag: {% content %}
-		p.expectPeek(lexer.RBRACE_PCT)
-		return &ast.ContentStatement{Token: p.curTok}
-	case lexer.RAW:
-		// Raw block: {% raw %}
-		return p.parseWispRawStatement()
-	case lexer.COMMENT:
-		// Comment block: {% comment %}
-		return p.parseWispCommentStatement()
-	case lexer.END:
-		// End tag: {% end %}
-		p.expectPeek(lexer.RBRACE_PCT)
-		p.PopScope()
-		return &ast.EndStatement{Token: p.curTok}
-	case lexer.ENDRAW:
-		// Endraw tag: {% endraw %}
-		p.expectPeek(lexer.RBRACE_PCT)
-		return &ast.EndStatement{Token: p.curTok}
-	case lexer.ENDCOMMENT:
-		// Endcomment tag: {% endcomment %}
-		p.expectPeek(lexer.RBRACE_PCT)
-		return &ast.EndStatement{Token: p.curTok}
-	case lexer.ELSE:
-		// Else tag: {% else %}
-		p.expectPeek(lexer.RBRACE_PCT)
-		return &ast.ElseStatement{Token: p.curTok}
-	case lexer.ELSIF:
-		// Elsif tag: {% elsif .condition %}
-		return p.parseWispElsifStatement()
-	case lexer.WHEN:
-		// When tag: {% when "value" %}
-		return p.parseWispWhenStatement()
-	default:
-		// Expression statement
-		return p.parseWispExpressionStatement()
-	}
-}
-
-// parseWispVariableStatement parses a variable access or assignment statement.
-func (p *Parser) parseWispVariableStatement() ast.Statement {
-	// Check if this is a pipe expression: . | function
-	if p.peekTokIs(lexer.PIPE) {
-		// Create a dot expression for the '.'
-		dotExpr := &ast.DotExpression{Token: p.curTok}
-		p.nextToken() // consume DOT, now at PIPE
-
-		// Now parse the pipe expression
-		// The pipe expression will be parsed by parsePipeExpression
-		p.nextToken() // move past PIPE to the identifier
-		pipeExpr := parsePipeExpression(p)
-
-		// Expect %}
-		if !p.expectPeek(lexer.RBRACE_PCT) {
-			return nil
+	var target string
+	for p.peek().Kind != lexer.TK_TAG_END && !p.atEOF() {
+		keyTok := p.advance()
+		if keyTok.Kind != lexer.TK_IDENT {
+			return nil, p.errorf(keyTok.Line, keyTok.Col, "expected attribute name in hoist tag")
 		}
-
-		return &ast.ExpressionStatement{
-			Token:      dotExpr.Token,
-			Expression: pipeExpr,
+		if p.peek().Kind != lexer.TK_ASSIGN {
+			return nil, p.errorf(p.peek().Line, p.peek().Col, "expected = after %q in hoist tag", keyTok.Value)
+		}
+		p.advance() // consume =
+		valTok := p.advance()
+		if valTok.Kind != lexer.TK_STRING {
+			return nil, p.errorf(valTok.Line, valTok.Col, "hoist target must be a string literal")
+		}
+		if keyTok.Value == "target" {
+			target = valTok.Value
 		}
 	}
-
-	// Otherwise, parse as dot expression
-	dotExpr := parseDotExpression(p)
-
-	// Type assert to DotExpression
-	dotExprTyped, ok := dotExpr.(*ast.DotExpression)
-	if !ok {
-		p.errors = append(p.errors, "expected dot expression")
-		return nil
+	if target == "" {
+		return nil, p.errorf(tagStart.Line, tagStart.Col, "hoist tag requires target= attribute")
+	}
+	if err := p.expectTagEnd(); err != nil {
+		return nil, err
 	}
 
-	// Check if this is an assignment
-	if p.peekTokIs(lexer.ASSIGN_OP) {
-		// Assignment: {% .name = value %}
-		p.nextToken() // consume =
-		p.nextToken() // move to value
-
-		// Parse the value expression
-		value := p.parseExpression(LOWEST)
-
-		// Expect %}
-		if !p.expectPeek(lexer.RBRACE_PCT) {
-			return nil
-		}
-
-		// Create assignment statement
-		return &ast.AssignStatement{
-			Token: dotExprTyped.Token,
-			Name:  dotExprTyped.Field,
-			Value: value,
-		}
+	body, err := p.parseBody("endhoist")
+	if err != nil {
+		return nil, err
 	}
-
-	// Check if this is a piped filter expression: {% .v | filter %}
-	if p.peekTokIs(lexer.PIPE) {
-		var expr ast.Expression = dotExprTyped
-		for p.peekTokIs(lexer.PIPE) {
-			p.nextToken() // consume to PIPE
-			p.nextToken() // move past PIPE to function name
-			pipe, ok := parsePipeExpression(p).(*ast.PipeExpression)
-			if !ok || pipe == nil {
-				return nil
-			}
-			// Prepend the current expression as first argument to this pipe
-			pipe.Arguments = append([]ast.Expression{expr}, pipe.Arguments...)
-			expr = pipe
-		}
-
-		if !p.expectPeek(lexer.RBRACE_PCT) {
-			return nil
-		}
-
-		return &ast.ExpressionStatement{
-			Token:      dotExprTyped.Token,
-			Expression: expr,
-		}
+	if err := p.expectTag("endhoist"); err != nil {
+		return nil, err
 	}
-
-	// Check if there's an infix operator (e.g. {% .x + .y %})
-	if p.infixParseFns[p.peekTok.Type] != nil {
-		var expr ast.Expression = dotExprTyped
-		for p.infixParseFns[p.peekTok.Type] != nil {
-			p.nextToken()
-			expr = p.infixParseFns[p.curTok.Type](p, expr)
-		}
-		if !p.expectPeek(lexer.RBRACE_PCT) {
-			return nil
-		}
-		return &ast.ExpressionStatement{Token: dotExprTyped.Token, Expression: expr}
-	}
-
-	// Just a variable access: {% .name %}
-	// parseDotExpression no longer advances, so expectPeek should work
-	if !p.expectPeek(lexer.RBRACE_PCT) {
-		return nil
-	}
-
-	return &ast.ExpressionStatement{
-		Token:      dotExprTyped.Token,
-		Expression: dotExprTyped,
-	}
-}
-
-// parseWispIfStatement parses an if statement: {% if .condition %}
-func (p *Parser) parseWispIfStatement() ast.Statement {
-	stmt := &ast.IfStatement{Token: p.curTok}
-
-	// Parse the condition
-	p.nextToken()
-	stmt.Condition = p.parseExpression(LOWEST)
-
-	// Expect %}
-	if !p.expectPeek(lexer.RBRACE_PCT) {
-		return nil
-	}
-
-	p.PushScope()
-	stmt.Consequence, stmt.Alternative = p.parseIfChain()
-	p.PopScope()
-
-	return stmt
-}
-
-// parseIfChain parses the body of an if/elsif statement and returns
-// (consequence, alternative). On entry, curTok is at %} (closing of the condition tag).
-// On exit, the final {% end %} has been consumed.
-func (p *Parser) parseIfChain() (*ast.BlockStatement, *ast.BlockStatement) {
-	body, termType := p.parseBodyStatements()
-
-	if termType == lexer.ELSIF {
-		// parseBodyStatements added the ElsifStatement as the last element and
-		// advanced past the %} of {% elsif %}, so curTok is now the first token
-		// of the elsif body.
-		var elsif *ast.ElsifStatement
-		if n := len(body.Statements); n > 0 {
-			if es, ok := body.Statements[n-1].(*ast.ElsifStatement); ok {
-				elsif = es
-				body.Statements = body.Statements[:n-1]
-			}
-		}
-		if elsif != nil {
-			inner := &ast.IfStatement{Token: elsif.Token, Condition: elsif.Condition}
-			inner.Consequence, inner.Alternative = p.parseIfChain()
-			return body, &ast.BlockStatement{Statements: []ast.Statement{inner}}
-		}
-	}
-
-	if termType == lexer.ELSE {
-		// curTok = {%,  peekTok = ELSE — consume {% else %}
-		p.nextToken()             // {%  → ELSE
-		p.expectPeek(lexer.RBRACE_PCT) // ELSE → %}
-		// parseBodyStatements will nextToken() past %} on entry
-		alt, _ := p.parseBodyStatements() // stops at {% end %}
-		p.consumeEndTag()
-		return body, alt
-	}
-
-	// termType == END: consume {% end %}
-	p.consumeEndTag()
-	return body, nil
-}
-
-// parseWispUnlessStatement parses an unless statement: {% unless .condition %}
-func (p *Parser) parseWispUnlessStatement() ast.Statement {
-	stmt := &ast.UnlessStatement{Token: p.curTok}
-
-	// Parse the condition
-	p.nextToken()
-	stmt.Condition = p.parseExpression(LOWEST)
-
-	// Expect %}
-	if !p.expectPeek(lexer.RBRACE_PCT) {
-		return nil
-	}
-
-	// Parse the body statements
-	p.PushScope()
-	body, termType := p.parseBodyStatements()
-	stmt.Consequence = body
-
-	if termType == lexer.ELSE {
-		p.nextToken()                  // {%  → ELSE
-		p.expectPeek(lexer.RBRACE_PCT) // ELSE → %}
-		alt, _ := p.parseBodyStatements()
-		stmt.Alternative = alt
-		p.consumeEndTag()
-	} else {
-		p.consumeEndTag()
-	}
-	p.PopScope()
-
-	return stmt
-}
-
-// parseWispAssignStatement parses an assign statement: {% assign .name = value %}
-func (p *Parser) parseWispAssignStatement() ast.Statement {
-	stmt := &ast.AssignStatement{Token: p.curTok}
-
-	// Expect a dot
-	if !p.expectPeek(lexer.DOT) {
-		return nil
-	}
-
-	// Parse the variable name
-	if !p.expectPeek(lexer.IDENT) {
-		return nil
-	}
-
-	stmt.Name = &ast.Identifier{Token: p.curTok, Value: p.curTok.Literal}
-
-	// Expect =
-	if !p.expectPeek(lexer.ASSIGN_OP) {
-		return nil
-	}
-
-	// Parse the value
-	p.nextToken()
-	stmt.Value = p.parseExpression(LOWEST)
-
-	// Expect %}
-	if !p.expectPeek(lexer.RBRACE_PCT) {
-		return nil
-	}
-
-	return stmt
-}
-
-// parseWispForStatement parses a for loop: {% for .item in .items %}
-func (p *Parser) parseWispForStatement() ast.Statement {
-	stmt := &ast.ForStatement{Token: p.curTok}
-
-	// Parse the loop variable (with or without index)
-	if p.peekTokIs(lexer.DOT) {
-		p.nextToken() // consume 'for'
-		p.nextToken() // consume dot
-		// We're now at the identifier, so just use it
-		if p.curTok.Type != lexer.IDENT {
-			p.errors = append(p.errors, fmt.Sprintf("expected identifier after dot, got %s", p.curTok.Type))
-			return nil
-		}
-		stmt.LoopVar = &ast.Identifier{Token: p.curTok, Value: p.curTok.Literal}
-	}
-
-	// Check for index variable: {% for .i, .item in .items %}
-	if p.peekTokIs(lexer.COMMA) {
-		p.nextToken() // consume to comma
-		p.nextToken() // move past comma
-		if p.curTokIs(lexer.DOT) {
-			p.nextToken() // move to identifier
-			if p.curTok.Type != lexer.IDENT {
-				p.errors = append(p.errors, fmt.Sprintf("expected identifier after dot, got %s", p.curTok.Type))
-				return nil
-			}
-			stmt.IndexVar = stmt.LoopVar
-			stmt.LoopVar = &ast.Identifier{Token: p.curTok, Value: p.curTok.Literal}
-		}
-	}
-
-	// Expect 'in'
-	if !p.expectPeek(lexer.IN) {
-		return nil
-	}
-
-	// Parse the collection
-	p.nextToken()
-	stmt.Collection = p.parseExpression(LOWEST)
-
-	// Handle piped collection: {% for .i in .v | filter %}
-	for p.peekTokIs(lexer.PIPE) {
-		p.nextToken() // consume to PIPE
-		p.nextToken() // move past PIPE to function name
-		pipe, ok := parsePipeExpression(p).(*ast.PipeExpression)
-		if !ok || pipe == nil {
-			return nil
-		}
-		pipe.Arguments = append([]ast.Expression{stmt.Collection}, pipe.Arguments...)
-		stmt.Collection = pipe
-	}
-
-	// Expect %}
-	if !p.expectPeek(lexer.RBRACE_PCT) {
-		return nil
-	}
-
-	// Parse the body statements
-	p.PushScope()
-	body, _ := p.parseBodyStatements()
-	stmt.Body = body
-	p.PopScope()
-
-	// Consume the end tag
-	p.consumeEndTag()
-
-	return stmt
-}
-
-// parseWispWhileStatement parses a while loop: {% while .condition %}
-func (p *Parser) parseWispWhileStatement() ast.Statement {
-	stmt := &ast.WhileStatement{Token: p.curTok}
-
-	// Parse the condition
-	p.nextToken()
-	stmt.Condition = p.parseExpression(LOWEST)
-
-	// Expect %}
-	if !p.expectPeek(lexer.RBRACE_PCT) {
-		return nil
-	}
-
-	// Parse the body statements
-	p.PushScope()
-	body, _ := p.parseBodyStatements()
-	stmt.Body = body
-	p.PopScope()
-
-	// Consume the end tag
-	p.consumeEndTag()
-
-	return stmt
-}
-
-// parseWispRangeStatement parses a range loop: {% range .start .end %}
-func (p *Parser) parseWispRangeStatement() ast.Statement {
-	stmt := &ast.RangeStatement{Token: p.curTok}
-
-	// Parse start value
-	p.nextToken()
-	stmt.Start = p.parseExpression(LOWEST)
-
-	// Parse end value
-	p.nextToken()
-	stmt.End = p.parseExpression(LOWEST)
-
-	// Expect %}
-	if !p.expectPeek(lexer.RBRACE_PCT) {
-		return nil
-	}
-
-	// Parse the body statements
-	p.PushScope()
-	body, _ := p.parseBodyStatements()
-	stmt.Body = body
-	p.PopScope()
-
-	// Consume the end tag
-	p.consumeEndTag()
-
-	return stmt
-}
-
-// parseWispCaseStatement parses a case statement: {% case .value %}
-func (p *Parser) parseWispCaseStatement() ast.Statement {
-	stmt := &ast.CaseStatement{Token: p.curTok}
-
-	// Parse the value
-	p.nextToken()
-	stmt.Value = p.parseExpression(LOWEST)
-
-	// Expect %}
-	if !p.expectPeek(lexer.RBRACE_PCT) {
-		return nil
-	}
-
-	// Parse the body - collect all statements until {% end %}
-	// Unlike other blocks, case bodies include when and else clauses
-	p.PushScope()
-	body := &ast.BlockStatement{Statements: []ast.Statement{}}
-
-	p.nextToken()
-	for {
-		// Stop at end tag
-		if p.curTok.Type == lexer.END {
-			break
-		}
-		if p.curTok.Type == lexer.EOF {
-			break
-		}
-
-		stmt := p.parseStatement()
-		if stmt != nil {
-			// Include everything except EndStatement
-			if _, isEnd := stmt.(*ast.EndStatement); isEnd {
-				break
-			}
-			body.Statements = append(body.Statements, stmt)
-		}
-		p.nextToken()
-	}
-
-	stmt.Body = body
-	p.PopScope()
-
-	// Consume the end tag (%})
-	if p.curTokIs(lexer.END) {
-		p.nextToken() // move to %}
-	}
-
-	return stmt
-}
-
-// parseWispWithStatement parses a with block: {% with .user as .currentUser %}
-func (p *Parser) parseWispWithStatement() ast.Statement {
-	stmt := &ast.WithStatement{Token: p.curTok}
-
-	// Parse the source expression
-	p.nextToken()
-	stmt.Source = p.parseExpression(LOWEST)
-
-	// Advance past the expression to reach AS
-	p.nextToken()
-
-	// After parsing expression and advancing, curTok should be AS
-	if !p.curTokIs(lexer.AS) {
-		p.errors = append(p.errors, fmt.Sprintf("expected AS, got %s", p.curTok.Type))
-		return nil
-	}
-
-	// Parse the target variable
-	p.nextToken()
-	if p.curTokIs(lexer.DOT) {
-		p.nextToken()
-		// After consuming DOT, curTok should be IDENT
-		if p.curTok.Type != lexer.IDENT {
-			p.errors = append(p.errors, fmt.Sprintf("expected identifier after dot, got %s", p.curTok.Type))
-			return nil
-		}
-		stmt.Target = &ast.Identifier{Token: p.curTok, Value: p.curTok.Literal}
-	}
-
-	// Consume the RBRACE_PCT token
-	if !p.expectPeek(lexer.RBRACE_PCT) {
-		return nil
-	}
-
-	// Parse the body statements
-	p.PushScope()
-	body, _ := p.parseBodyStatements()
-	stmt.Body = body
-	p.PopScope()
-
-	// Consume the end tag
-	p.consumeEndTag()
-
-	return stmt
-}
-
-// parseWispCycleStatement parses a cycle tag: {% cycle 'odd' 'even' %}
-func (p *Parser) parseWispCycleStatement() ast.Statement {
-	stmt := &ast.CycleStatement{Token: p.curTok}
-
-	// Parse the values
-	for !p.peekTokIs(lexer.RBRACE_PCT) && !p.peekTokIs(lexer.EOF) {
-		p.nextToken()
-		value := p.parseExpression(LOWEST)
-		if value != nil {
-			stmt.Values = append(stmt.Values, value)
-		}
-	}
-
-	// Expect %}
-	if !p.expectPeek(lexer.RBRACE_PCT) {
-		return nil
-	}
-
-	return stmt
-}
-
-// parseWispIncrementStatement parses an increment tag: {% increment .counter %}
-func (p *Parser) parseWispIncrementStatement() ast.Statement {
-	stmt := &ast.IncrementStatement{Token: p.curTok}
-
-	// Parse the variable
-	p.nextToken()
-	if p.curTokIs(lexer.DOT) {
-		p.nextToken() // move to identifier
-		if p.curTok.Type != lexer.IDENT {
-			p.errors = append(p.errors, fmt.Sprintf("expected identifier after dot, got %s", p.curTok.Type))
-			return nil
-		}
-		stmt.Variable = &ast.Identifier{Token: p.curTok, Value: p.curTok.Literal}
-	}
-
-	// Expect %}
-	if !p.expectPeek(lexer.RBRACE_PCT) {
-		return nil
-	}
-
-	return stmt
-}
-
-// parseWispDecrementStatement parses a decrement tag: {% decrement .counter %}
-func (p *Parser) parseWispDecrementStatement() ast.Statement {
-	stmt := &ast.DecrementStatement{Token: p.curTok}
-
-	// Parse the variable
-	p.nextToken()
-	if p.curTokIs(lexer.DOT) {
-		p.nextToken() // move to identifier
-		if p.curTok.Type != lexer.IDENT {
-			p.errors = append(p.errors, fmt.Sprintf("expected identifier after dot, got %s", p.curTok.Type))
-			return nil
-		}
-		stmt.Variable = &ast.Identifier{Token: p.curTok, Value: p.curTok.Literal}
-	}
-
-	// Expect %}
-	if !p.expectPeek(lexer.RBRACE_PCT) {
-		return nil
-	}
-
-	return stmt
-}
-
-// parseWispIncludeStatement parses an include tag: {% include "template" %}
-func (p *Parser) parseWispIncludeStatement() ast.Statement {
-	stmt := &ast.IncludeStatement{Token: p.curTok}
-
-	// Parse the template name
-	p.nextToken()
-	if p.curTokIs(lexer.STRING) {
-		stmt.Template = &ast.StringLiteral{Token: p.curTok, Value: p.curTok.Literal}
-	}
-
-	// Optional context
-	if p.peekTokIs(lexer.DOT) {
-		p.nextToken()
-		stmt.Context = parseDotExpression(p)
-	}
-
-	// Expect %}
-	if !p.expectPeek(lexer.RBRACE_PCT) {
-		return nil
-	}
-
-	return stmt
-}
-
-// parseWispRenderStatement parses a render tag: {% render "template" .data %}
-func (p *Parser) parseWispRenderStatement() ast.Statement {
-	stmt := &ast.RenderStatement{Token: p.curTok}
-
-	// Parse the template name
-	p.nextToken()
-	if p.curTokIs(lexer.STRING) {
-		stmt.Template = &ast.StringLiteral{Token: p.curTok, Value: p.curTok.Literal}
-	}
-
-	// Parse parameters
-	for !p.peekTokIs(lexer.RBRACE_PCT) && !p.peekTokIs(lexer.EOF) {
-		p.nextToken()
-		param := p.parseExpression(LOWEST)
-		if param != nil {
-			stmt.Params = append(stmt.Params, param)
-		}
-	}
-
-	// Expect %}
-	if !p.expectPeek(lexer.RBRACE_PCT) {
-		return nil
-	}
-
-	return stmt
-}
-
-// parseWispComponentStatement parses a component tag: {% component "Button" .props %}
-func (p *Parser) parseWispComponentStatement() ast.Statement {
-	stmt := &ast.ComponentStatement{Token: p.curTok}
-
-	// Parse the component name
-	p.nextToken()
-	if p.curTokIs(lexer.STRING) {
-		stmt.Name = &ast.StringLiteral{Token: p.curTok, Value: p.curTok.Literal}
-	}
-
-	// Parse props
-	for !p.peekTokIs(lexer.RBRACE_PCT) && !p.peekTokIs(lexer.EOF) {
-		p.nextToken()
-		prop := p.parseExpression(LOWEST)
-		if prop != nil {
-			stmt.Props = append(stmt.Props, prop)
-		}
-	}
-
-	// Expect %}
-	if !p.expectPeek(lexer.RBRACE_PCT) {
-		return nil
-	}
-
-	return stmt
-}
-
-// parseWispExtendsStatement parses an extends tag: {% extends "layout" %}
-func (p *Parser) parseWispExtendsStatement() ast.Statement {
-	stmt := &ast.ExtendsStatement{Token: p.curTok}
-
-	// Parse the layout name
-	p.nextToken()
-	if p.curTokIs(lexer.STRING) {
-		stmt.Layout = &ast.StringLiteral{Token: p.curTok, Value: p.curTok.Literal}
-	}
-
-	// Expect %}
-	if !p.expectPeek(lexer.RBRACE_PCT) {
-		return nil
-	}
-
-	return stmt
-}
-
-// parseWispBlockStatement parses a block tag: {% block name %}
-func (p *Parser) parseWispBlockStatement() ast.Statement {
-	stmt := &ast.BlockTagStatement{Token: p.curTok}
-
-	// Parse the block name
-	p.nextToken()
-	if p.curTokIs(lexer.IDENT) {
-		stmt.Name = &ast.Identifier{Token: p.curTok, Value: p.curTok.Literal}
-	}
-
-	// Expect %}
-	if !p.expectPeek(lexer.RBRACE_PCT) {
-		return nil
-	}
-
-	return stmt
-}
-
-// parseWispRawStatement parses a raw block: {% raw %}
-// At entry: curTok is RAW, lexer position is after "raw" keyword
-func (p *Parser) parseWispRawStatement() ast.Statement {
-	stmt := &ast.RawStatement{Token: p.curTok}
-	input := p.l.GetInput()
-
-	// The lexer position is after "raw" keyword
-	// We need to find the %} that closes {% raw %}
-	// Search backward from current position to find %}
-	searchStart := p.l.GetPosition()
-	rawTagEnd := searchStart
-
-	// Search backward for %} to find end of {% raw %} tag
-	for i := searchStart; i >= 1; i-- {
-		if input[i-1] == '%' && input[i] == '}' {
-			rawTagEnd = i + 1
-			break
-		}
-	}
-
-	// Now search for {% endraw %} from rawTagEnd
-	for i := rawTagEnd; i < len(input)-7; i++ {
-		if input[i] != '{' || input[i+1] != '%' {
-			continue
-		}
-		j := i + 2
-		for j < len(input) && (input[j] == ' ' || input[j] == '\t' || input[j] == '\n' || input[j] == '\r') {
-			j++
-		}
-		if j+6 <= len(input) && input[j:j+6] == "endraw" {
-			stmt.Content = input[rawTagEnd:i]
-
-			// Calculate position after {% endraw %}
-			j += 6
-			for j < len(input) && (input[j] == ' ' || input[j] == '\t' || input[j] == '\n' || input[j] == '\r') {
-				j++
-			}
-			if j+1 < len(input) && input[j] == '%' && input[j+1] == '}' {
-				j += 2
-			}
-
-			// Sync lexer to position after {% endraw %}
-			p.l.SetPosition(j)
-
-			// Fetch tokens from the new position
-			p.curTok = p.l.NextToken()
-			p.peekTok = p.l.NextToken()
-
-			// Tell ParseProgram to skip the next advance
-			p.skipAdvance = true
-
-			return stmt
-		}
-	}
-
-	// No {% endraw %} found - set EOF to stop parsing
-	p.curTok = lexer.NewToken(lexer.EOF, "", 0, 0)
-	return stmt
-}
-
-// parseWispCommentStatement parses a comment block: {% comment %}
-func (p *Parser) parseWispCommentStatement() ast.Statement {
-	stmt := &ast.CommentStatement{Token: p.curTok}
-
-	// Expect %}
-	if !p.expectPeek(lexer.RBRACE_PCT) {
-		return nil
-	}
-
-	// Parse body statements until {% endcomment %} or {% end %} (skip content)
-	body, closingType := p.parseBodyStatements()
-	_ = body // Comments discard their body content
-
-	// Consume the closing tag
-	if closingType == lexer.ENDCOMMENT || closingType == lexer.END {
-		p.consumeEndTag()
-	}
-
-	return stmt
-}
-
-// parseWispElsifStatement parses an elsif statement: {% elsif .condition %}
-func (p *Parser) parseWispElsifStatement() ast.Statement {
-	stmt := &ast.ElsifStatement{Token: p.curTok}
-
-	// Parse the condition
-	p.nextToken()
-	stmt.Condition = p.parseExpression(LOWEST)
-
-	// Expect %}
-	if !p.expectPeek(lexer.RBRACE_PCT) {
-		return nil
-	}
-
-	return stmt
-}
-
-// parseWispWhenStatement parses a when statement: {% when "value" %}
-func (p *Parser) parseWispWhenStatement() ast.Statement {
-	stmt := &ast.WhenStatement{Token: p.curTok}
-
-	// Parse the value
-	p.nextToken()
-	stmt.Value = p.parseExpression(LOWEST)
-
-	// Expect %}
-	if !p.expectPeek(lexer.RBRACE_PCT) {
-		return nil
-	}
-
-	return stmt
-}
-
-// parseWispExpressionStatement parses an expression statement inside {% %}.
-func (p *Parser) parseWispExpressionStatement() ast.Statement {
-	stmt := &ast.ExpressionStatement{Token: p.curTok}
-
-	stmt.Expression = p.parseExpression(LOWEST)
-
-	// Expect %}
-	if !p.expectPeek(lexer.RBRACE_PCT) {
-		return nil
-	}
-
-	return stmt
-}
-
-// isKeywordUsableAsIdent returns true if a keyword token can be used as a filter/function name.
-func isKeywordUsableAsIdent(t lexer.TokenType) bool {
-	// Some keywords share names with built-in filters (e.g. "raw")
-	return t == lexer.RAW
+	return &ast.HoistNode{Target: target, Body: body, Line: tagStart.Line}, nil
 }

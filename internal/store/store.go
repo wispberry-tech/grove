@@ -1,89 +1,42 @@
+// internal/store/store.go
 package store
 
 import (
 	"fmt"
-	"os"
 	"sync"
 )
 
-// TemplateStore interface for loading templates.
-type TemplateStore interface {
-	ReadTemplate(name string) ([]byte, error)
-	ListTemplates() ([]string, error)
+// Store is the template source backend.
+type Store interface {
+	// Load returns the template source for the given name, or an error if not found.
+	Load(name string) ([]byte, error)
 }
 
-// MemoryStore is an in-memory template store.
+// MemoryStore holds templates in memory. Safe for concurrent use.
 type MemoryStore struct {
-	templates map[string]string
-	mu        sync.RWMutex
+	mu    sync.RWMutex
+	tmpls map[string]string
 }
 
-// NewMemoryStore creates a new in-memory template store.
+// NewMemoryStore creates an empty MemoryStore.
 func NewMemoryStore() *MemoryStore {
-	return &MemoryStore{
-		templates: make(map[string]string),
-	}
+	return &MemoryStore{tmpls: make(map[string]string)}
 }
 
-// Register adds a template to store.
-func (ms *MemoryStore) Register(name string, content string) {
-	ms.mu.Lock()
-	defer ms.mu.Unlock()
-	ms.templates[name] = content
+// Set stores a template under the given name.
+func (s *MemoryStore) Set(name, content string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.tmpls[name] = content
 }
 
-// ReadTemplate reads a template from store.
-func (ms *MemoryStore) ReadTemplate(name string) ([]byte, error) {
-	ms.mu.RLock()
-	defer ms.mu.RUnlock()
-	content, ok := ms.templates[name]
+// Load implements Store.
+func (s *MemoryStore) Load(name string) ([]byte, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	content, ok := s.tmpls[name]
 	if !ok {
-		return nil, fmt.Errorf("template not found: %s", name)
+		return nil, fmt.Errorf("template %q not found", name)
 	}
 	return []byte(content), nil
-}
-
-// ListTemplates lists all templates in the store.
-func (ms *MemoryStore) ListTemplates() ([]string, error) {
-	ms.mu.RLock()
-	defer ms.mu.RUnlock()
-	names := make([]string, 0, len(ms.templates))
-	for name := range ms.templates {
-		names = append(names, name)
-	}
-	return names, nil
-}
-
-// FileSystemStore loads templates from the filesystem.
-type FileSystemStore struct {
-	baseDir string
-}
-
-// NewFileSystemStore creates a new filesystem template store.
-func NewFileSystemStore(baseDir string) *FileSystemStore {
-	return &FileSystemStore{baseDir: baseDir}
-}
-
-// ReadTemplate reads a template from the filesystem.
-func (fs *FileSystemStore) ReadTemplate(name string) ([]byte, error) {
-	path := fs.baseDir + "/" + name
-	if path[len(path)-5:] != ".wisp" {
-		path += ".wisp"
-	}
-	return os.ReadFile(path)
-}
-
-// ListTemplates lists all templates in the base directory.
-func (fs *FileSystemStore) ListTemplates() ([]string, error) {
-	entries, err := os.ReadDir(fs.baseDir)
-	if err != nil {
-		return nil, err
-	}
-	var names []string
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			names = append(names, entry.Name())
-		}
-	}
-	return names, nil
 }

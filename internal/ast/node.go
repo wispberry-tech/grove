@@ -1,774 +1,401 @@
+// internal/ast/node.go
 package ast
 
-import (
-	"strings"
+// Node is the base interface for all AST nodes.
+type Node interface{ wispyNode() }
 
-	"template-wisp/internal/lexer"
-)
+// Program is the root node.
+type Program struct{ Body []Node }
 
-// Node represents a node in the abstract syntax tree.
-type Node interface {
-	// TokenLiteral returns the literal value of the token associated with this node.
-	TokenLiteral() string
-	// String returns a string representation of the node.
-	String() string
-}
+func (*Program) wispyNode() {}
 
-// Statement represents a statement node.
-type Statement interface {
-	Node
-	statementNode()
-}
+// ─── Statement nodes ──────────────────────────────────────────────────────────
 
-// Expression represents an expression node.
-type Expression interface {
-	Node
-	expressionNode()
-}
-
-// Program is the root node of the AST.
-type Program struct {
-	Statements []Statement
-}
-
-func (p *Program) TokenLiteral() string {
-	if len(p.Statements) > 0 {
-		return p.Statements[0].TokenLiteral()
-	}
-	return ""
-}
-
-func (p *Program) String() string {
-	var out string
-	for _, s := range p.Statements {
-		out += s.String()
-	}
-	return out
-}
-
-func (p *Program) statementNode() {}
-
-// LetStatement represents a let statement: `{% let .name = "value" %}` or `{% assign .name = "value" %}`
-type LetStatement struct {
-	Token lexer.Token // the LET or ASSIGN token
-	Name  *Identifier
-	Value Expression
-}
-
-func (ls *LetStatement) statementNode()       {}
-func (ls *LetStatement) TokenLiteral() string { return ls.Token.Literal }
-func (ls *LetStatement) String() string {
-	var out string
-
-	out += ls.TokenLiteral() + " "
-	out += ls.Name.String()
-	out += " = "
-
-	if ls.Value != nil {
-		out += ls.Value.String()
-	}
-
-	out += ";"
-
-	return out
-}
-
-// Identifier represents an identifier node: `.name` or `.user.name`
-type Identifier struct {
-	Token lexer.Token // the DOT token
+// TextNode holds raw text content (no interpolation).
+type TextNode struct {
 	Value string
+	Line  int
 }
 
-func (i *Identifier) expressionNode()      {}
-func (i *Identifier) TokenLiteral() string { return i.Token.Literal }
-func (i *Identifier) String() string       { return "." + i.Value }
+func (*TextNode) wispyNode() {}
 
-// IntegerLiteral represents an integer literal.
-type IntegerLiteral struct {
-	Token lexer.Token
-	Value int64
+// OutputNode holds an {{ expression }} to be evaluated and printed.
+type OutputNode struct {
+	Expr       Node
+	StripLeft  bool
+	StripRight bool
+	Line       int
 }
 
-func (il *IntegerLiteral) expressionNode()      {}
-func (il *IntegerLiteral) TokenLiteral() string { return il.Token.Literal }
-func (il *IntegerLiteral) String() string       { return il.Token.Literal }
+func (*OutputNode) wispyNode() {}
 
-// Boolean represents a boolean literal.
-type Boolean struct {
-	Token lexer.Token
+// RawNode holds content from {% raw %}...{% endraw %} — printed verbatim.
+type RawNode struct {
+	Value string
+	Line  int
+}
+
+func (*RawNode) wispyNode() {}
+
+// TagNode is an unrecognised or deferred tag (e.g. if/for/extends).
+// The parser uses this as a placeholder for tags handled in later plans,
+// and to reject banned tags (extends/import) in inline mode.
+type TagNode struct {
+	Name string
+	Line int
+}
+
+func (*TagNode) wispyNode() {}
+
+// ─── Expression nodes ─────────────────────────────────────────────────────────
+
+// NilLiteral is the nil/null literal.
+type NilLiteral struct{ Line int }
+
+func (*NilLiteral) wispyNode() {}
+
+// BoolLiteral is true or false.
+type BoolLiteral struct {
 	Value bool
+	Line  int
 }
 
-func (b *Boolean) expressionNode()      {}
-func (b *Boolean) TokenLiteral() string { return b.Token.Literal }
-func (b *Boolean) String() string       { return b.Token.Literal }
+func (*BoolLiteral) wispyNode() {}
 
-// StringLiteral represents a string literal.
+// IntLiteral is an integer literal.
+type IntLiteral struct {
+	Value int64
+	Line  int
+}
+
+func (*IntLiteral) wispyNode() {}
+
+// FloatLiteral is a floating-point literal.
+type FloatLiteral struct {
+	Value float64
+	Line  int
+}
+
+func (*FloatLiteral) wispyNode() {}
+
+// StringLiteral is a quoted string literal.
 type StringLiteral struct {
-	Token lexer.Token
 	Value string
+	Line  int
 }
 
-func (sl *StringLiteral) expressionNode()      {}
-func (sl *StringLiteral) TokenLiteral() string { return sl.Token.Literal }
-func (sl *StringLiteral) String() string       { return sl.Token.Literal }
-
-// ArrayLiteral represents an array literal.
-type ArrayLiteral struct {
-	Token    lexer.Token // the '[' token
-	Elements []Expression
-}
-
-func (al *ArrayLiteral) expressionNode()      {}
-func (al *ArrayLiteral) TokenLiteral() string { return al.Token.Literal }
-func (al *ArrayLiteral) String() string {
-	var out string
-
-	out += "["
-	for i, el := range al.Elements {
-		out += el.String()
-		if i < len(al.Elements)-1 {
-			out += ", "
-		}
-	}
-	out += "]"
-
-	return out
-}
-
-// HashLiteral represents a hash/map literal.
-type HashLiteral struct {
-	Token lexer.Token // the '{' token
-	Pairs map[Expression]Expression
-}
-
-func (hl *HashLiteral) expressionNode()      {}
-func (hl *HashLiteral) TokenLiteral() string { return hl.Token.Literal }
-func (hl *HashLiteral) String() string {
-	var out string
-
-	out += "{"
-	for k, v := range hl.Pairs {
-		out += k.String()
-		out += ": "
-		out += v.String()
-		if k != nil && v != nil && len(hl.Pairs) > 1 {
-			// We can't easily get the index, so we'll just not add comma after last item
-			// This is a simplified approach
-			out += ", "
-		}
-	}
-	out += "}"
-
-	return out
-}
-
-// PrefixExpression represents a prefix expression.
-type PrefixExpression struct {
-	Token    lexer.Token // The prefix token, e.g. !
-	Operator string
-	Right    Expression
-}
-
-func (pe *PrefixExpression) expressionNode()      {}
-func (pe *PrefixExpression) TokenLiteral() string { return pe.Token.Literal }
-func (pe *PrefixExpression) String() string {
-	var out string
-
-	out += "("
-	out += pe.Operator
-	out += pe.Right.String()
-	out += ")"
-
-	return out
-}
-
-// InfixExpression represents an infix expression.
-type InfixExpression struct {
-	Token    lexer.Token // The operator token, e.g. +
-	Left     Expression
-	Operator string
-	Right    Expression
-}
-
-func (ie *InfixExpression) expressionNode()      {}
-func (ie *InfixExpression) TokenLiteral() string { return ie.Token.Literal }
-func (ie *InfixExpression) String() string {
-	var out string
-
-	out += "("
-	out += ie.Left.String()
-	out += ie.Operator
-	out += ie.Right.String()
-	out += ")"
-
-	return out
-}
-
-// IfStatement represents an if statement.
-type IfStatement struct {
-	Token       lexer.Token // The 'if' token
-	Condition   Expression
-	Consequence *BlockStatement
-	Alternative *BlockStatement
-}
-
-func (is *IfStatement) statementNode()       {}
-func (is *IfStatement) TokenLiteral() string { return is.Token.Literal }
-func (is *IfStatement) String() string {
-	var out string
-
-	out += "if "
-	out += is.Condition.String()
-	out += " "
-	out += is.Consequence.String()
-
-	if is.Alternative != nil {
-		out += "else "
-		out += is.Alternative.String()
-	}
-
-	return out
-}
-
-// BlockStatement represents a block of statements.
-type BlockStatement struct {
-	Token      lexer.Token // The { token
-	Statements []Statement
-}
-
-func (bs *BlockStatement) statementNode()       {}
-func (bs *BlockStatement) expressionNode()      {} // To allow BlockStatement to be used as an expression
-func (bs *BlockStatement) TokenLiteral() string { return bs.Token.Literal }
-func (bs *BlockStatement) String() string {
-	var out string
-
-	for _, s := range bs.Statements {
-		out += s.String()
-	}
-
-	return out
-}
-
-// ExpressionStatement represents an expression statement: `{% .name %}` or `{% . | date %}`
-type ExpressionStatement struct {
-	Token      lexer.Token // the first token of the expression
-	Expression Expression
-}
-
-func (es *ExpressionStatement) statementNode()       {}
-func (es *ExpressionStatement) TokenLiteral() string { return es.Token.Literal }
-func (es *ExpressionStatement) String() string {
-	return es.Expression.String()
-}
+func (*StringLiteral) wispyNode() {}
 
-// ReturnStatement represents a return statement: `return <expression>;`
-type ReturnStatement struct {
-	Token       lexer.Token // The 'return' token
-	ReturnValue Expression
+// Identifier is a variable reference.
+type Identifier struct {
+	Name string
+	Line int
 }
-
-func (rs *ReturnStatement) statementNode()       {}
-func (rs *ReturnStatement) TokenLiteral() string { return rs.Token.Literal }
-func (rs *ReturnStatement) String() string {
-	var out string
-
-	out += rs.TokenLiteral() + " "
 
-	if rs.ReturnValue != nil {
-		out += rs.ReturnValue.String()
-	}
+func (*Identifier) wispyNode() {}
 
-	out += ";"
-
-	return out
+// AttributeAccess is obj.key — resolves key on obj.
+type AttributeAccess struct {
+	Object Node
+	Key    string
+	Line   int
 }
 
-// FunctionLiteral represents a function literal.
-type FunctionLiteral struct {
-	Token      lexer.Token // The 'fn' token
-	Parameters []*Identifier
-	Body       *BlockStatement
-}
+func (*AttributeAccess) wispyNode() {}
 
-func (fl *FunctionLiteral) expressionNode()      {}
-func (fl *FunctionLiteral) TokenLiteral() string { return fl.Token.Literal }
-func (fl *FunctionLiteral) String() string {
-	var out string
-
-	params := []string{}
-	for _, p := range fl.Parameters {
-		params = append(params, p.String())
-	}
-
-	out += fl.TokenLiteral()
-	out += "("
-	out += strings.Join(params, ", ")
-	out += ") "
-	out += fl.Body.String()
-
-	return out
+// IndexAccess is obj[key] — integer or string key.
+type IndexAccess struct {
+	Object Node
+	Key    Node
+	Line   int
 }
 
-// CallExpression represents a function call.
-type CallExpression struct {
-	Token     lexer.Token // The '(' token
-	Function  Expression  // Identifier or FunctionLiteral
-	Arguments []Expression
-}
+func (*IndexAccess) wispyNode() {}
 
-func (ce *CallExpression) expressionNode()      {}
-func (ce *CallExpression) TokenLiteral() string { return ce.Token.Literal }
-func (ce *CallExpression) String() string {
-	var out string
-
-	args := []string{}
-	for _, a := range ce.Arguments {
-		args = append(args, a.String())
-	}
-
-	out += ce.Function.String()
-	out += "("
-	out += strings.Join(args, ", ")
-	out += ")"
-
-	return out
+// BinaryExpr is left op right.
+// Op is one of: + - * / % ~ == != < <= > >= and or
+type BinaryExpr struct {
+	Op    string
+	Left  Node
+	Right Node
+	Line  int
 }
 
-// IndexExpression represents an index expression.
-type IndexExpression struct {
-	Token lexer.Token // The '[' token
-	Left  Expression
-	Index Expression
-}
+func (*BinaryExpr) wispyNode() {}
 
-func (ie *IndexExpression) expressionNode()      {}
-func (ie *IndexExpression) TokenLiteral() string { return ie.Token.Literal }
-func (ie *IndexExpression) String() string {
-	var out string
-
-	out += "("
-	out += ie.Left.String()
-	out += "["
-	out += ie.Index.String()
-	out += "])"
-
-	return out
+// UnaryExpr is op operand.
+// Op is one of: not -
+type UnaryExpr struct {
+	Op      string
+	Operand Node
+	Line    int
 }
 
-// IfExpression represents an if expression (ternary-like if-else as expression).
-type IfExpression struct {
-	Token       lexer.Token // The 'if' token
-	Condition   Expression
-	Consequence Expression
-	Alternative Expression
-}
+func (*UnaryExpr) wispyNode() {}
 
-func (ie *IfExpression) expressionNode()      {}
-func (ie *IfExpression) TokenLiteral() string { return ie.Token.Literal }
-func (ie *IfExpression) String() string {
-	var out string
-
-	out += "if "
-	out += ie.Condition.String()
-	out += " "
-	out += ie.Consequence.String()
-	out += "else "
-	out += ie.Alternative.String()
-
-	return out
+// TernaryExpr is: Consequence if Condition else Alternative
+// (Wispy syntax: `value if cond else fallback`)
+type TernaryExpr struct {
+	Condition   Node
+	Consequence Node
+	Alternative Node
+	Line        int
 }
 
-// DotExpression represents a dot expression for variable access: .name, .user.name
-type DotExpression struct {
-	Token lexer.Token   // The DOT token
-	Field *Identifier   // The first field after the dot
-	Chain []*Identifier // Additional chained fields
-}
+func (*TernaryExpr) wispyNode() {}
 
-func (de *DotExpression) expressionNode()      {}
-func (de *DotExpression) TokenLiteral() string { return de.Token.Literal }
-func (de *DotExpression) String() string {
-	var out string
-	out += "." + de.Field.String()
-	for _, field := range de.Chain {
-		out += "." + field.String()
-	}
-	return out
+// FilterExpr applies Filter(Args...) to Value.
+// e.g. name | truncate(20, "…") → FilterExpr{Value: Identifier{name}, Filter: "truncate", Args: [20, "…"]}
+type FilterExpr struct {
+	Value  Node
+	Filter string
+	Args   []Node
+	Line   int
 }
 
-// PipeExpression represents a pipe expression for function calls: . | date, . | format "%s"
-type PipeExpression struct {
-	Token     lexer.Token  // The PIPE token
-	Function  *Identifier  // The function name
-	Arguments []Expression // Optional arguments
-}
+func (*FilterExpr) wispyNode() {}
 
-func (pe *PipeExpression) expressionNode()      {}
-func (pe *PipeExpression) TokenLiteral() string { return pe.Token.Literal }
-func (pe *PipeExpression) String() string {
-	var out string
-	out += ". | " + pe.Function.String()
-	for _, arg := range pe.Arguments {
-		out += " " + arg.String()
-	}
-	return out
-}
+// ─── Control flow nodes ───────────────────────────────────────────────────────
 
-// AssignStatement represents an assignment statement: {% assign .name = value %}
-type AssignStatement struct {
-	Token lexer.Token // The ASSIGN token
-	Name  *Identifier
-	Value Expression
+// ElifClause is a single elif branch in an IfNode.
+type ElifClause struct {
+	Condition Node
+	Body      []Node
 }
 
-func (as *AssignStatement) statementNode()       {}
-func (as *AssignStatement) TokenLiteral() string { return as.Token.Literal }
-func (as *AssignStatement) String() string {
-	var out string
-	out += "assign ." + as.Name.String() + " = "
-	if as.Value != nil {
-		out += as.Value.String()
-	}
-	return out
+// IfNode is {% if cond %}...{% elif cond %}...{% else %}...{% endif %}.
+type IfNode struct {
+	Condition Node
+	Body      []Node
+	Elifs     []ElifClause
+	Else      []Node // nil if no else branch
+	Line      int
 }
 
-// UnlessStatement represents an unless statement: {% unless .condition %}
-type UnlessStatement struct {
-	Token       lexer.Token // The UNLESS token
-	Condition   Expression
-	Consequence *BlockStatement
-	Alternative *BlockStatement
-}
+func (*IfNode) wispyNode() {}
 
-func (us *UnlessStatement) statementNode()       {}
-func (us *UnlessStatement) TokenLiteral() string { return us.Token.Literal }
-func (us *UnlessStatement) String() string {
-	var out string
-	out += "unless " + us.Condition.String() + " "
-	if us.Consequence != nil {
-		out += us.Consequence.String()
-	}
-	if us.Alternative != nil {
-		out += " else " + us.Alternative.String()
-	}
-	return out
+// UnlessNode is {% unless cond %}...{% endunless %} — equivalent to if not cond.
+type UnlessNode struct {
+	Condition Node
+	Body      []Node
+	Line      int
 }
 
-// ForStatement represents a for loop: {% for .item in .items %}
-type ForStatement struct {
-	Token      lexer.Token // The FOR token
-	IndexVar   *Identifier // Optional index variable
-	LoopVar    *Identifier // Loop variable
-	Collection Expression  // The collection to iterate over
-	Body       *BlockStatement
-}
+func (*UnlessNode) wispyNode() {}
 
-func (fs *ForStatement) statementNode()       {}
-func (fs *ForStatement) TokenLiteral() string { return fs.Token.Literal }
-func (fs *ForStatement) String() string {
-	var out string
-	out += "for "
-	if fs.IndexVar != nil {
-		out += fs.IndexVar.String() + ", "
-	}
-	out += fs.LoopVar.String() + " in " + fs.Collection.String() + " "
-	if fs.Body != nil {
-		out += fs.Body.String()
-	}
-	return out
+// ForNode is {% for var in iterable %}...{% empty %}...{% endfor %}.
+// If Var2 is non-empty, it's a two-variable form (for k,v in map / for i,item in list).
+type ForNode struct {
+	Var1     string
+	Var2     string // empty for single-var form
+	Iterable Node
+	Body     []Node
+	Empty    []Node // nil if no {% empty %}
+	Line     int
 }
 
-// WhileStatement represents a while loop: {% while .condition %}
-type WhileStatement struct {
-	Token     lexer.Token // The WHILE token
-	Condition Expression
-	Body      *BlockStatement
-}
+func (*ForNode) wispyNode() {}
 
-func (ws *WhileStatement) statementNode()       {}
-func (ws *WhileStatement) TokenLiteral() string { return ws.Token.Literal }
-func (ws *WhileStatement) String() string {
-	var out string
-	out += "while " + ws.Condition.String() + " "
-	if ws.Body != nil {
-		out += ws.Body.String()
-	}
-	return out
+// SetNode is {% set name = expr %}.
+type SetNode struct {
+	Name string
+	Expr Node
+	Line int
 }
 
-// RangeStatement represents a range loop: {% range .start .end %}
-type RangeStatement struct {
-	Token lexer.Token // The RANGE token
-	Start Expression
-	End   Expression
-	Body  *BlockStatement
-}
+func (*SetNode) wispyNode() {}
 
-func (rs *RangeStatement) statementNode()       {}
-func (rs *RangeStatement) TokenLiteral() string { return rs.Token.Literal }
-func (rs *RangeStatement) String() string {
-	var out string
-	out += "range " + rs.Start.String() + " " + rs.End.String() + " "
-	if rs.Body != nil {
-		out += rs.Body.String()
-	}
-	return out
+// WithNode is {% with %}...{% endwith %} — creates an isolated scope.
+type WithNode struct {
+	Body []Node
+	Line int
 }
 
-// CaseStatement represents a case statement: {% case .value %}
-type CaseStatement struct {
-	Token lexer.Token // The CASE token
-	Value Expression
-	Body  *BlockStatement
-}
+func (*WithNode) wispyNode() {}
 
-func (cs *CaseStatement) statementNode()       {}
-func (cs *CaseStatement) TokenLiteral() string { return cs.Token.Literal }
-func (cs *CaseStatement) String() string {
-	var out string
-	out += "case " + cs.Value.String() + " "
-	if cs.Body != nil {
-		out += cs.Body.String()
-	}
-	return out
+// CaptureNode is {% capture name %}...{% endcapture %} — renders body to a string variable.
+type CaptureNode struct {
+	Name string
+	Body []Node
+	Line int
 }
 
-// WithStatement represents a with block: {% with .user as .currentUser %}
-type WithStatement struct {
-	Token  lexer.Token // The WITH token
-	Source Expression
-	Target *Identifier
-	Body   *BlockStatement
-}
+func (*CaptureNode) wispyNode() {}
 
-func (ws *WithStatement) statementNode()       {}
-func (ws *WithStatement) TokenLiteral() string { return ws.Token.Literal }
-func (ws *WithStatement) String() string {
-	var out string
-	out += "with " + ws.Source.String() + " as " + ws.Target.String() + " "
-	if ws.Body != nil {
-		out += ws.Body.String()
-	}
-	return out
+// FuncCallNode is a function call expression: name(args...).
+// Only built-in functions are supported in Plan 2: range().
+type FuncCallNode struct {
+	Name string
+	Args []Node
+	Line int
 }
 
-// CycleStatement represents a cycle tag: {% cycle 'odd' 'even' %}
-type CycleStatement struct {
-	Token  lexer.Token // The CYCLE token
-	Values []Expression
-}
+func (*FuncCallNode) wispyNode() {}
 
-func (cs *CycleStatement) statementNode()       {}
-func (cs *CycleStatement) TokenLiteral() string { return cs.Token.Literal }
-func (cs *CycleStatement) String() string {
-	var out string
-	out += "cycle "
-	for i, v := range cs.Values {
-		out += v.String()
-		if i < len(cs.Values)-1 {
-			out += " "
-		}
-	}
-	return out
+// NamedArgNode is a key=value argument in a macro call: name="Alice".
+type NamedArgNode struct {
+	Key   string
+	Value Node
+	Line  int
 }
 
-// IncrementStatement represents an increment tag: {% increment .counter %}
-type IncrementStatement struct {
-	Token    lexer.Token // The INCREMENT token
-	Variable *Identifier
-}
+func (*NamedArgNode) wispyNode() {}
 
-func (is *IncrementStatement) statementNode()       {}
-func (is *IncrementStatement) TokenLiteral() string { return is.Token.Literal }
-func (is *IncrementStatement) String() string {
-	return "increment ." + is.Variable.String()
+// MacroParam is a single parameter in a macro definition.
+type MacroParam struct {
+	Name    string
+	Default Node // nil = required parameter; non-nil = default expression
 }
 
-// DecrementStatement represents a decrement tag: {% decrement .counter %}
-type DecrementStatement struct {
-	Token    lexer.Token // The DECREMENT token
-	Variable *Identifier
+// MacroNode is {% macro name(p1, p2="default") %}...{% endmacro %}.
+type MacroNode struct {
+	Name   string
+	Params []MacroParam
+	Body   []Node
+	Line   int
 }
 
-func (ds *DecrementStatement) statementNode()       {}
-func (ds *DecrementStatement) TokenLiteral() string { return ds.Token.Literal }
-func (ds *DecrementStatement) String() string {
-	return "decrement ." + ds.Variable.String()
-}
+func (*MacroNode) wispyNode() {}
 
-// BreakStatement represents a break tag: {% break %}
-type BreakStatement struct {
-	Token lexer.Token // The BREAK token
+// MacroCallExpr is a macro call expression: name(args...) or ns.name(args...).
+// Callee is an Identifier or AttributeAccess.
+type MacroCallExpr struct {
+	Callee    Node
+	PosArgs   []Node
+	NamedArgs []NamedArgNode
+	Line      int
 }
-
-func (bs *BreakStatement) statementNode()       {}
-func (bs *BreakStatement) TokenLiteral() string { return bs.Token.Literal }
-func (bs *BreakStatement) String() string       { return "break" }
 
-// ContinueStatement represents a continue tag: {% continue %}
-type ContinueStatement struct {
-	Token lexer.Token // The CONTINUE token
-}
+func (*MacroCallExpr) wispyNode() {}
 
-func (cs *ContinueStatement) statementNode()       {}
-func (cs *ContinueStatement) TokenLiteral() string { return cs.Token.Literal }
-func (cs *ContinueStatement) String() string       { return "continue" }
-
-// IncludeStatement represents an include tag: {% include "template" %}
-type IncludeStatement struct {
-	Token    lexer.Token // The INCLUDE token
-	Template *StringLiteral
-	Context  Expression
+// CallNode is {% call macro(args) %}body{% endcall %} — call with a caller body.
+type CallNode struct {
+	Callee    Node           // the macro being called (Identifier or AttributeAccess)
+	PosArgs   []Node
+	NamedArgs []NamedArgNode
+	Body      []Node         // the caller() body
+	Line      int
 }
 
-func (is *IncludeStatement) statementNode()       {}
-func (is *IncludeStatement) TokenLiteral() string { return is.Token.Literal }
-func (is *IncludeStatement) String() string {
-	var out string
-	out += "include " + is.Template.String()
-	if is.Context != nil {
-		out += " " + is.Context.String()
-	}
-	return out
-}
+func (*CallNode) wispyNode() {}
 
-// RenderStatement represents a render tag: {% render "template" .data %}
-type RenderStatement struct {
-	Token    lexer.Token // The RENDER token
-	Template *StringLiteral
-	Params   []Expression
+// IncludeNode is {% include "name" [with k=v, ...] [isolated] %}.
+type IncludeNode struct {
+	Name     string         // template name (string literal)
+	WithVars []NamedArgNode // extra variables (empty = no with clause)
+	Isolated bool
+	Line     int
 }
 
-func (rs *RenderStatement) statementNode()       {}
-func (rs *RenderStatement) TokenLiteral() string { return rs.Token.Literal }
-func (rs *RenderStatement) String() string {
-	var out string
-	out += "render " + rs.Template.String()
-	for _, p := range rs.Params {
-		out += " " + p.String()
-	}
-	return out
-}
+func (*IncludeNode) wispyNode() {}
 
-// ComponentStatement represents a component tag: {% component "Button" .props %}
-type ComponentStatement struct {
-	Token lexer.Token // The COMPONENT token
-	Name  *StringLiteral
-	Props []Expression
+// RenderNode is {% render "name" [with k=v, ...] %} — always isolated.
+type RenderNode struct {
+	Name     string
+	WithVars []NamedArgNode
+	Line     int
 }
 
-func (cs *ComponentStatement) statementNode()       {}
-func (cs *ComponentStatement) TokenLiteral() string { return cs.Token.Literal }
-func (cs *ComponentStatement) String() string {
-	var out string
-	out += "component " + cs.Name.String()
-	for _, p := range cs.Props {
-		out += " " + p.String()
-	}
-	return out
-}
+func (*RenderNode) wispyNode() {}
 
-// ExtendsStatement represents an extends tag: {% extends "layout" %}
-type ExtendsStatement struct {
-	Token  lexer.Token // The EXTENDS token
-	Layout *StringLiteral
+// ImportNode is {% import "name" as alias %}.
+type ImportNode struct {
+	Name  string // template name
+	Alias string // namespace identifier
+	Line  int
 }
 
-func (es *ExtendsStatement) statementNode()       {}
-func (es *ExtendsStatement) TokenLiteral() string { return es.Token.Literal }
-func (es *ExtendsStatement) String() string {
-	return "extends " + es.Layout.String()
-}
+func (*ImportNode) wispyNode() {}
 
-// BlockTagStatement represents a block tag: {% block name %}
-type BlockTagStatement struct {
-	Token lexer.Token // The BLOCK token
-	Name  *Identifier
+// ExtendsNode is {% extends "name" %} — must be the first non-whitespace node.
+type ExtendsNode struct {
+	Name string
+	Line int
 }
 
-func (bts *BlockTagStatement) statementNode()       {}
-func (bts *BlockTagStatement) TokenLiteral() string { return bts.Token.Literal }
-func (bts *BlockTagStatement) String() string {
-	return "block " + bts.Name.String()
-}
+func (*ExtendsNode) wispyNode() {}
 
-// ContentStatement represents a content tag: {% content %}
-type ContentStatement struct {
-	Token lexer.Token // The CONTENT token
+// BlockNode is {% block name %}...{% endblock %}.
+// In an extending template, Block nodes define overrides.
+// In a base template, Block nodes define named slots with default content.
+type BlockNode struct {
+	Name string
+	Body []Node
+	Line int
 }
 
-func (cs *ContentStatement) statementNode()       {}
-func (cs *ContentStatement) TokenLiteral() string { return cs.Token.Literal }
-func (cs *ContentStatement) String() string       { return "content" }
+func (*BlockNode) wispyNode() {}
 
-// EndStatement represents an end tag: {% end %}
-type EndStatement struct {
-	Token lexer.Token // The END token
+// PropsNode is {% props name, name2="default", ... %} — declares accepted props.
+// Must appear at the top of a component template. Reuses MacroParam for params.
+type PropsNode struct {
+	Params []MacroParam
+	Line   int
 }
 
-func (es *EndStatement) statementNode()       {}
-func (es *EndStatement) TokenLiteral() string { return es.Token.Literal }
-func (es *EndStatement) String() string       { return "end" }
+func (*PropsNode) wispyNode() {}
 
-// ElseStatement represents an else tag: {% else %}
-type ElseStatement struct {
-	Token lexer.Token // The ELSE token
+// FillNode is {% fill "name" %}...{% endfill %} inside a component call body.
+// FillNode is NOT directly part of the template AST — it is consumed by the parser
+// when parsing a ComponentNode and stored in ComponentNode.Fills.
+type FillNode struct {
+	Name string
+	Body []Node
+	Line int
 }
 
-func (es *ElseStatement) statementNode()       {}
-func (es *ElseStatement) TokenLiteral() string { return es.Token.Literal }
-func (es *ElseStatement) String() string       { return "else" }
-
-// ElsifStatement represents an elsif tag: {% elsif .condition %}
-type ElsifStatement struct {
-	Token     lexer.Token // The ELSIF token
-	Condition Expression
+// ComponentNode is {% component "name" k=v, ... %}...{% endcomponent %}.
+type ComponentNode struct {
+	Name        string         // template name (string literal)
+	Props       []NamedArgNode // passed props (key=value pairs)
+	DefaultFill []Node         // body content outside fill blocks → fed to {% slot %}
+	Fills       []FillNode     // named {% fill %}...{% endfill %} blocks
+	Line        int
 }
 
-func (es *ElsifStatement) statementNode()       {}
-func (es *ElsifStatement) TokenLiteral() string { return es.Token.Literal }
-func (es *ElsifStatement) String() string {
-	return "elsif " + es.Condition.String()
-}
-
-// WhenStatement represents a when tag: {% when "value" %}
-type WhenStatement struct {
-	Token lexer.Token // The WHEN token
-	Value Expression
-}
+func (*ComponentNode) wispyNode() {}
 
-func (ws *WhenStatement) statementNode()       {}
-func (ws *WhenStatement) TokenLiteral() string { return ws.Token.Literal }
-func (ws *WhenStatement) String() string {
-	return "when " + ws.Value.String()
+// SlotNode is {% slot ["name"] %}...{% endslot %} inside a component template.
+type SlotNode struct {
+	Name    string // "" = default slot
+	Default []Node // fallback content rendered when no matching fill
+	Line    int
 }
 
-// RawStatement represents a raw block: {% raw %}
-type RawStatement struct {
-	Token   lexer.Token // The RAW token
-	Content string      // Literal content between {% raw %} and {% endraw %}
-}
+func (*SlotNode) wispyNode() {}
 
-func (rs *RawStatement) statementNode()       {}
-func (rs *RawStatement) TokenLiteral() string { return rs.Token.Literal }
-func (rs *RawStatement) String() string       { return "raw " + rs.Content }
+// ─── Plan 7 nodes ─────────────────────────────────────────────────────────────
 
-// CommentStatement represents a comment block: {% comment %}
-type CommentStatement struct {
-	Token lexer.Token // The COMMENT token
+// AssetNode declares an asset (CSS/JS/other) to collect into RenderResult.Assets.
+// Src and AssetType are required. Attrs holds remaining key=value attributes (defer, async, etc.).
+// Priority controls ordering within the asset's type group (higher = earlier). Default 0.
+type AssetNode struct {
+	Src       string
+	AssetType string         // from type= attr ("stylesheet", "script", etc.)
+	Attrs     []NamedArgNode // remaining attrs; bare idents get Value=StringLiteral{""}
+	Priority  int            // from priority= attr
+	Line      int
 }
 
-func (cs *CommentStatement) statementNode()       {}
-func (cs *CommentStatement) TokenLiteral() string { return cs.Token.Literal }
-func (cs *CommentStatement) String() string       { return "comment" }
+func (*AssetNode) wispyNode() {}
 
-// TextContent represents literal text content between Wisp tags
-type TextContent struct {
-	Token lexer.Token // The text token
+// MetaNode declares a metadata entry for RenderResult.Meta.
+// Key is the value of the name=, property=, or http-equiv= attribute.
+// Value is the value of the content= attribute.
+type MetaNode struct {
+	Key   string
 	Value string
+	Line  int
 }
 
-func (tc *TextContent) statementNode()       {}
-func (tc *TextContent) TokenLiteral() string { return tc.Token.Literal }
-func (tc *TextContent) String() string       { return tc.Value }
+func (*MetaNode) wispyNode() {}
+
+// HoistNode collects its rendered body into RenderResult.Hoisted[Target].
+// Target is a user-defined string (e.g. "head", "foot", "analytics").
+type HoistNode struct {
+	Target string
+	Body   []Node
+	Line   int
+}
+
+func (*HoistNode) wispyNode() {}
