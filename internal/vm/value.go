@@ -61,15 +61,15 @@ func BoolVal(b bool) Value {
 	return v
 }
 
-func IntVal(n int64) Value     { return Value{typ: TypeInt, ival: n} }
-func FloatVal(f float64) Value { return Value{typ: TypeFloat, fval: f} }
-func StringVal(s string) Value { return Value{typ: TypeString, sval: s} }
-func SafeHTMLVal(s string) Value { return Value{typ: TypeSafeHTML, sval: s} }
-func ListVal(items []Value) Value { return Value{typ: TypeList, oval: items} }
-func MapVal(m map[string]any) Value { return Value{typ: TypeMap, oval: m} }
-func ResolvableVal(r Resolvable) Value { return Value{typ: TypeResolvable, oval: r} }
+func IntVal(n int64) Value                { return Value{typ: TypeInt, ival: n} }
+func FloatVal(f float64) Value            { return Value{typ: TypeFloat, fval: f} }
+func StringVal(s string) Value            { return Value{typ: TypeString, sval: s} }
+func SafeHTMLVal(s string) Value          { return Value{typ: TypeSafeHTML, sval: s} }
+func ListVal(items []Value) Value         { return Value{typ: TypeList, oval: items} }
+func MapVal(m map[string]any) Value       { return Value{typ: TypeMap, oval: m} }
+func ResolvableVal(r Resolvable) Value    { return Value{typ: TypeResolvable, oval: r} }
 func MacroVal(m *compiler.MacroDef) Value { return Value{typ: TypeMacro, oval: m} }
-func LoopVarVal(d *loopVarData) Value      { return Value{typ: TypeLoopVar, oval: d} }
+func LoopVarVal(d *loopVarData) Value     { return Value{typ: TypeLoopVar, oval: d} }
 
 // ─── String representation ────────────────────────────────────────────────────
 

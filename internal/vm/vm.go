@@ -105,7 +105,7 @@ type VM struct {
 	loopVars   [32]loopVarData
 	ldepth     int // current loop depth (0 = not in loop)
 	captures   [8]captureFrame
-	cdepth     int // current capture depth
+	cdepth     int                             // current capture depth
 	blockSlots map[string][]*compiler.Bytecode // per-render block override table
 	blockChain []blockChainFrame               // current block execution context for super()
 	compStack  [16]componentFrame
