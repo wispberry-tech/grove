@@ -185,6 +185,7 @@ func Execute(ctx context.Context, bc *compiler.Bytecode, data map[string]any, en
 func (v *VM) run(ctx context.Context, bc *compiler.Bytecode) (string, error) {
 	ip := 0
 	instrs := bc.Instrs
+	ps := profileInit()
 	for ip < len(instrs) {
 		select {
 		case <-ctx.Done():
@@ -194,9 +195,11 @@ func (v *VM) run(ctx context.Context, bc *compiler.Bytecode) (string, error) {
 
 		instr := instrs[ip]
 		ip++
+		profileRecord(&ps, instr.Op)
 
 		switch instr.Op {
 		case compiler.OP_HALT:
+			profileFlush(&ps)
 			return v.out.String(), nil
 
 		case compiler.OP_PUSH_NIL:

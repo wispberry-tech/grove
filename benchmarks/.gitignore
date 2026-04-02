@@ -1,0 +1,4 @@
+profiles/
+profile
+!profile/*
+results.txt
