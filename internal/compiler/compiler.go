@@ -151,9 +151,6 @@ func (c *cmp) compileNode(node ast.Node) error {
 	case *ast.IfNode:
 		return c.compileIf(n)
 
-	case *ast.UnlessNode:
-		return c.compileUnless(n)
-
 	case *ast.ForNode:
 		return c.compileFor(n)
 
@@ -162,13 +159,6 @@ func (c *cmp) compileNode(node ast.Node) error {
 			return err
 		}
 		c.emit(OP_STORE_VAR, uint16(c.addName(n.Name)), 0, 0)
-
-	case *ast.WithNode:
-		c.emit(OP_PUSH_SCOPE, 0, 0, 0)
-		if err := c.compileBody(n.Body); err != nil {
-			return err
-		}
-		c.emit(OP_POP_SCOPE, 0, 0, 0)
 
 	case *ast.CaptureNode:
 		c.emit(OP_CAPTURE_START, uint16(c.addName(n.Name)), 0, 0)
@@ -232,6 +222,9 @@ func (c *cmp) compileNode(node ast.Node) error {
 	case *ast.ComponentNode:
 		return c.compileComponent(n)
 
+	case *ast.LetNode:
+		return c.compileLet(n)
+
 	case *ast.AssetNode:
 		return c.compileAsset(n)
 
@@ -286,21 +279,6 @@ func (c *cmp) compileIf(n *ast.IfNode) error {
 		c.instrs[jIdx].A = end
 	}
 
-	return nil
-}
-
-// ─── {% unless %} compiler ────────────────────────────────────────────────────
-
-func (c *cmp) compileUnless(n *ast.UnlessNode) error {
-	if err := c.compileExpr(n.Condition); err != nil {
-		return err
-	}
-	c.emit(OP_NOT, 0, 0, 0)
-	jfIdx := c.emitPlaceholder(OP_JUMP_FALSE)
-	if err := c.compileBody(n.Body); err != nil {
-		return err
-	}
-	c.instrs[jfIdx].A = uint16(len(c.instrs))
 	return nil
 }
 
@@ -476,6 +454,23 @@ func (c *cmp) compileExpr(node ast.Node) error {
 			return fmt.Errorf("compiler: unknown function %q", n.Name)
 		}
 
+	case *ast.ListLiteral:
+		for _, elem := range n.Elements {
+			if err := c.compileExpr(elem); err != nil {
+				return err
+			}
+		}
+		c.emit(OP_BUILD_LIST, uint16(len(n.Elements)), 0, 0)
+
+	case *ast.MapLiteral:
+		for _, entry := range n.Entries {
+			c.emitPushConst(entry.Key)
+			if err := c.compileExpr(entry.Value); err != nil {
+				return err
+			}
+		}
+		c.emit(OP_BUILD_MAP, uint16(len(n.Entries)), 0, 0)
+
 	default:
 		return fmt.Errorf("compiler: unknown expr type %T", node)
 	}
@@ -600,7 +595,7 @@ func (c *cmp) compileCallNode(n *ast.CallNode) error {
 	return nil
 }
 
-// compileInclude compiles {% include "name" [with k=v] [isolated] %}.
+// compileInclude compiles {% include "name" [k=v ...] %}.
 func (c *cmp) compileInclude(n *ast.IncludeNode) error {
 	for _, kv := range n.WithVars {
 		c.emitPushConst(kv.Key)
@@ -608,11 +603,7 @@ func (c *cmp) compileInclude(n *ast.IncludeNode) error {
 			return err
 		}
 	}
-	flags := uint8(0)
-	if n.Isolated {
-		flags = 1
-	}
-	c.emit(OP_INCLUDE, uint16(c.addName(n.Name)), uint16(len(n.WithVars)), flags)
+	c.emit(OP_INCLUDE, uint16(c.addName(n.Name)), uint16(len(n.WithVars)), 0)
 	return nil
 }
 
@@ -740,5 +731,67 @@ func (c *cmp) compileComponent(n *ast.ComponentNode) error {
 	}
 
 	c.emit(OP_COMPONENT, uint16(compIdx), uint16(len(n.Props)), 0)
+	return nil
+}
+
+// ─── {% let %} compiler ──────────────────────────────────────────────────────
+
+func (c *cmp) compileLet(n *ast.LetNode) error {
+	return c.compileLetBody(n.Body)
+}
+
+func (c *cmp) compileLetBody(stmts []ast.LetStmt) error {
+	for _, stmt := range stmts {
+		switch s := stmt.(type) {
+		case *ast.LetAssignment:
+			if err := c.compileExpr(s.Expr); err != nil {
+				return err
+			}
+			c.emit(OP_STORE_VAR, uint16(c.addName(s.Name)), 0, 0)
+		case *ast.LetIf:
+			if err := c.compileLetIf(s); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (c *cmp) compileLetIf(n *ast.LetIf) error {
+	if err := c.compileExpr(n.Condition); err != nil {
+		return err
+	}
+	jfIdx := c.emitPlaceholder(OP_JUMP_FALSE)
+
+	if err := c.compileLetBody(n.Body); err != nil {
+		return err
+	}
+
+	var endJumps []int
+	endJumps = append(endJumps, c.emitPlaceholder(OP_JUMP))
+	c.instrs[jfIdx].A = uint16(len(c.instrs))
+
+	for _, elif := range n.Elifs {
+		if err := c.compileExpr(elif.Condition); err != nil {
+			return err
+		}
+		elifJfIdx := c.emitPlaceholder(OP_JUMP_FALSE)
+		if err := c.compileLetBody(elif.Body); err != nil {
+			return err
+		}
+		endJumps = append(endJumps, c.emitPlaceholder(OP_JUMP))
+		c.instrs[elifJfIdx].A = uint16(len(c.instrs))
+	}
+
+	if len(n.Else) > 0 {
+		if err := c.compileLetBody(n.Else); err != nil {
+			return err
+		}
+	}
+
+	end := uint16(len(c.instrs))
+	for _, jIdx := range endJumps {
+		c.instrs[jIdx].A = end
+	}
 	return nil
 }

@@ -47,8 +47,10 @@ const (
 	TK_AND  // and
 	TK_OR   // or
 	TK_NOT  // not
-	TK_IF   // if   (inline ternary)
-	TK_ELSE // else (inline ternary)
+	TK_QUESTION // ?  (ternary)
+	TK_COLON    // :  (ternary)
+	TK_LBRACE   // { (map literal)
+	TK_RBRACE   // } (map literal)
 	TK_IN   // in   (for...in)
 )
 

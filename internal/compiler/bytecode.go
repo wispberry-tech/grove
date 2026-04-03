@@ -45,8 +45,6 @@ const (
 
 	// ─── Control flow opcodes (Plan 2) ────────────────────────────────────────
 	OP_STORE_VAR     // A=name_idx; pop value, store to local scope (set)
-	OP_PUSH_SCOPE    // push a new child scope (with)
-	OP_POP_SCOPE     // pop to parent scope (endwith)
 	OP_FOR_INIT      // A=fallthrough_ip; pop collection, push loop state; if empty jump to A
 	OP_FOR_BIND_1    // A=var_name_idx; bind items[idx] to scope; bind "loop" map
 	OP_FOR_BIND_KV   // A=key_idx B=val_idx; bind sorted key+val (map iteration) or index+val (list two-var)
@@ -101,6 +99,13 @@ const (
 	// OP_HOIST — render a body sub-bytecode and append output to hoisted[target].
 	// A = index into Consts for the target string; B = index into bc.Blocks for body.
 	OP_HOIST
+
+	// OP_BUILD_LIST — A = element count.
+	// Pops N values, builds []Value, pushes list Value.
+	OP_BUILD_LIST
+	// OP_BUILD_MAP — A = entry count.
+	// Pops N*2 values (key, val pairs), builds map, pushes map Value.
+	OP_BUILD_MAP
 )
 
 // MacroParam is a single parameter in a compiled macro.

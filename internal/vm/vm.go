@@ -412,25 +412,6 @@ func (v *VM) run(ctx context.Context, bc *compiler.Bytecode) (string, error) {
 			val := v.pop()
 			v.sc.Set(bc.Names[instr.A], val)
 
-		case compiler.OP_PUSH_SCOPE:
-			if v.ldepth > 0 && v.loopScopes[v.ldepth-1] != nil {
-				// Reuse existing loop scope
-				v.loopScopes[v.ldepth-1].Reset(v.sc)
-				v.sc = v.loopScopes[v.ldepth-1]
-			} else if v.ldepth > 0 {
-				// First iteration: create scope, cache for reuse
-				s := scope.NewWithSize(v.sc, 3) // loop var + "loop" + maybe key
-				v.loopScopes[v.ldepth-1] = s
-				v.sc = s
-			} else {
-				v.sc = scope.New(v.sc)
-			}
-
-		case compiler.OP_POP_SCOPE:
-			if parent := v.sc.Parent(); parent != nil {
-				v.sc = parent
-			}
-
 		case compiler.OP_FOR_INIT:
 			coll := v.pop()
 			ls, ok := v.makeLoopState(coll)
@@ -595,7 +576,6 @@ func (v *VM) run(ctx context.Context, bc *compiler.Bytecode) (string, error) {
 		case compiler.OP_INCLUDE:
 			tmplName := bc.Names[instr.A]
 			pairCount := int(instr.B)
-			isolated := instr.Flags&1 != 0
 
 			// Pop with-var pairs
 			withVars := make(map[string]any, pairCount)
@@ -611,14 +591,7 @@ func (v *VM) run(ctx context.Context, bc *compiler.Bytecode) (string, error) {
 			}
 
 			savedSC := v.sc
-			if isolated {
-				globalSc := scope.New(nil)
-				for k, val := range v.eng.GlobalData() {
-					globalSc.Set(k, FromAny(val))
-				}
-				v.sc = scope.New(globalSc)
-			}
-			if len(withVars) > 0 || isolated {
+			if len(withVars) > 0 {
 				v.sc = scope.New(v.sc)
 				for k, val := range withVars {
 					v.sc.Set(k, val.(Value))
@@ -952,6 +925,33 @@ func (v *VM) run(ctx context.Context, bc *compiler.Bytecode) (string, error) {
 			}
 			v.rc.hoisted[target] = append(v.rc.hoisted[target], captured)
 
+		case compiler.OP_BUILD_LIST:
+			count := int(instr.A)
+			elems := make([]Value, count)
+			for i := count - 1; i >= 0; i-- {
+				elems[i] = v.pop()
+			}
+			v.push(ListVal(elems))
+
+		case compiler.OP_BUILD_MAP:
+			count := int(instr.A)
+			// Pop key/value pairs (in reverse stack order) then insert in source order.
+			type kv struct {
+				k string
+				v Value
+			}
+			pairs := make([]kv, count)
+			for i := count - 1; i >= 0; i-- {
+				val := v.pop()
+				key := v.pop()
+				pairs[i] = kv{key.String(), val}
+			}
+			m := NewOrderedMap(count)
+			for _, p := range pairs {
+				m.Set(p.k, p.v)
+			}
+			v.push(OrderedMapVal(m))
+
 		default:
 			return "", fmt.Errorf("vm: unknown opcode %d at ip=%d", instr.Op, ip-1)
 		}
@@ -1007,6 +1007,15 @@ func (v *VM) makeLoopState(coll Value) (loopState, bool) {
 		lst, _ := coll.oval.([]Value)
 		return loopState{items: lst}, true
 	case TypeMap:
+		if om, ok := coll.oval.(*OrderedMap); ok {
+			keys := om.Keys()
+			vals := make([]Value, len(keys))
+			for i, k := range keys {
+				v, _ := om.Get(k)
+				vals[i] = FromAny(v)
+			}
+			return loopState{items: vals, keys: keys, isMap: true}, true
+		}
 		m, _ := coll.oval.(map[string]any)
 		keys := make([]string, 0, len(m))
 		for k := range m {

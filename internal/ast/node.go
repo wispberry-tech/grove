@@ -133,8 +133,7 @@ type UnaryExpr struct {
 
 func (*UnaryExpr) wispyNode() {}
 
-// TernaryExpr is: Consequence if Condition else Alternative
-// (Wispy syntax: `value if cond else fallback`)
+// TernaryExpr is: Condition ? Consequence : Alternative
 type TernaryExpr struct {
 	Condition   Node
 	Consequence Node
@@ -174,15 +173,6 @@ type IfNode struct {
 
 func (*IfNode) wispyNode() {}
 
-// UnlessNode is {% unless cond %}...{% endunless %} — equivalent to if not cond.
-type UnlessNode struct {
-	Condition Node
-	Body      []Node
-	Line      int
-}
-
-func (*UnlessNode) wispyNode() {}
-
 // ForNode is {% for var in iterable %}...{% empty %}...{% endfor %}.
 // If Var2 is non-empty, it's a two-variable form (for k,v in map / for i,item in list).
 type ForNode struct {
@@ -204,14 +194,6 @@ type SetNode struct {
 }
 
 func (*SetNode) wispyNode() {}
-
-// WithNode is {% with %}...{% endwith %} — creates an isolated scope.
-type WithNode struct {
-	Body []Node
-	Line int
-}
-
-func (*WithNode) wispyNode() {}
 
 // CaptureNode is {% capture name %}...{% endcapture %} — renders body to a string variable.
 type CaptureNode struct {
@@ -279,11 +261,10 @@ type CallNode struct {
 
 func (*CallNode) wispyNode() {}
 
-// IncludeNode is {% include "name" [with k=v, ...] [isolated] %}.
+// IncludeNode is {% include "name" [k=v ...] %}.
 type IncludeNode struct {
 	Name     string         // template name (string literal)
 	WithVars []NamedArgNode // extra variables (empty = no with clause)
-	Isolated bool
 	Line     int
 }
 
@@ -363,6 +344,67 @@ type SlotNode struct {
 }
 
 func (*SlotNode) wispyNode() {}
+
+// ─── Literal collection nodes ─────────────────────────────────────────────────
+
+// ListLiteral is [expr, expr, ...].
+type ListLiteral struct {
+	Elements []Node
+	Line     int
+}
+
+func (*ListLiteral) wispyNode() {}
+
+// MapEntry is a single key: value pair in a map literal.
+type MapEntry struct {
+	Key   string // unquoted identifier
+	Value Node
+}
+
+// MapLiteral is { key: expr, key: expr, ... }.
+type MapLiteral struct {
+	Entries []MapEntry
+	Line    int
+}
+
+func (*MapLiteral) wispyNode() {}
+
+// ─── Let block nodes ─────────────────────────────────────────────────────────
+
+// LetStmt is a statement inside a let block (*LetAssignment or *LetIf).
+type LetStmt interface{ letStmt() }
+
+// LetAssignment is a single name = expression inside a let block.
+type LetAssignment struct {
+	Name string
+	Expr Node
+}
+
+func (*LetAssignment) letStmt() {}
+
+// LetIf is a conditional block inside a let block.
+type LetIf struct {
+	Condition Node
+	Body      []LetStmt
+	Elifs     []LetElif
+	Else      []LetStmt
+}
+
+func (*LetIf) letStmt() {}
+
+// LetElif is a single elif branch inside a LetIf.
+type LetElif struct {
+	Condition Node
+	Body      []LetStmt
+}
+
+// LetNode is {% let %}...{% endlet %} — multi-variable assignment block.
+type LetNode struct {
+	Body []LetStmt
+	Line int
+}
+
+func (*LetNode) wispyNode() {}
 
 // ─── Plan 7 nodes ─────────────────────────────────────────────────────────────
 

@@ -4,6 +4,7 @@ package parser
 import (
 	"fmt"
 	"strconv"
+	"strings"
 
 	"grove/internal/ast"
 	"grove/internal/groverrors"
@@ -101,10 +102,6 @@ func tokenTagName(tk lexer.Token) (string, bool) {
 	switch tk.Kind {
 	case lexer.TK_IDENT:
 		return tk.Value, true
-	case lexer.TK_IF:
-		return "if", true
-	case lexer.TK_ELSE:
-		return "else", true
 	case lexer.TK_NOT:
 		return "not", true
 	case lexer.TK_IN:
@@ -175,16 +172,27 @@ func (p *parser) parseTag() (ast.Node, error) {
 		return p.parseIf(tagStart)
 
 	case "unless":
-		return p.parseUnless(tagStart)
+		return nil, &groverrors.ParseError{
+			Line:    tagStart.Line,
+			Column:  tagStart.Col,
+			Message: "unknown tag \"unless\": use {% if not ... %} instead",
+		}
 
 	case "for":
 		return p.parseFor(tagStart)
+
+	case "let":
+		return p.parseLet(tagStart)
 
 	case "set":
 		return p.parseSet(tagStart)
 
 	case "with":
-		return p.parseWith(tagStart)
+		return nil, &groverrors.ParseError{
+			Line:    tagStart.Line,
+			Column:  tagStart.Col,
+			Message: `unknown tag "with": use {% let %} or {% set %} instead`,
+		}
 
 	case "capture":
 		return p.parseCapture(tagStart)
@@ -309,27 +317,6 @@ func (p *parser) parseIf(tagStart lexer.Token) (*ast.IfNode, error) {
 	return node, nil
 }
 
-// ─── {% unless %} ─────────────────────────────────────────────────────────────
-
-func (p *parser) parseUnless(tagStart lexer.Token) (*ast.UnlessNode, error) {
-	p.advance() // consume "unless"
-	cond, err := p.parseExpr(0)
-	if err != nil {
-		return nil, err
-	}
-	if err := p.expectTagEnd(); err != nil {
-		return nil, err
-	}
-	body, err := p.parseBody("endunless")
-	if err != nil {
-		return nil, err
-	}
-	if err := p.expectTag("endunless"); err != nil {
-		return nil, err
-	}
-	return &ast.UnlessNode{Condition: cond, Body: body, Line: tagStart.Line}, nil
-}
-
 // ─── {% for %} ────────────────────────────────────────────────────────────────
 
 func (p *parser) parseFor(tagStart lexer.Token) (*ast.ForNode, error) {
@@ -421,23 +408,6 @@ func (p *parser) parseSet(tagStart lexer.Token) (*ast.SetNode, error) {
 	return &ast.SetNode{Name: nameTok.Value, Expr: expr, Line: tagStart.Line}, nil
 }
 
-// ─── {% with %} ───────────────────────────────────────────────────────────────
-
-func (p *parser) parseWith(tagStart lexer.Token) (*ast.WithNode, error) {
-	p.advance() // consume "with"
-	if err := p.expectTagEnd(); err != nil {
-		return nil, err
-	}
-	body, err := p.parseBody("endwith")
-	if err != nil {
-		return nil, err
-	}
-	if err := p.expectTag("endwith"); err != nil {
-		return nil, err
-	}
-	return &ast.WithNode{Body: body, Line: tagStart.Line}, nil
-}
-
 // ─── {% capture %} ────────────────────────────────────────────────────────────
 
 func (p *parser) parseCapture(tagStart lexer.Token) (*ast.CaptureNode, error) {
@@ -475,23 +445,23 @@ func (p *parser) parseExpr(minPrec int) (ast.Node, error) {
 		}
 
 		switch tk.Kind {
-		case lexer.TK_IF:
-			p.advance() // consume if
-			cond, err := p.parseExpr(0)
+		case lexer.TK_QUESTION:
+			p.advance() // consume ?
+			consequence, err := p.parseExpr(0)
 			if err != nil {
 				return nil, err
 			}
-			if p.peek().Kind != lexer.TK_ELSE {
-				return nil, p.errorf(p.peek().Line, p.peek().Col, "expected 'else' in ternary expression")
+			if p.peek().Kind != lexer.TK_COLON {
+				return nil, p.errorf(p.peek().Line, p.peek().Col, "expected ':' in ternary expression")
 			}
-			p.advance() // consume else
+			p.advance() // consume :
 			alt, err := p.parseExpr(0)
 			if err != nil {
 				return nil, err
 			}
 			left = &ast.TernaryExpr{
-				Condition:   cond,
-				Consequence: left,
+				Condition:   left,
+				Consequence: consequence,
 				Alternative: alt,
 				Line:        tk.Line,
 			}
@@ -628,9 +598,63 @@ func (p *parser) parsePrimary() (ast.Node, error) {
 		}
 		p.advance()
 		return expr, nil
+	case lexer.TK_LBRACKET:
+		return p.parseListLiteral(tk)
+	case lexer.TK_LBRACE:
+		return p.parseMapLiteral(tk)
 	default:
 		return nil, p.errorf(tk.Line, tk.Col, "unexpected token in expression: %q", tk.Value)
 	}
+}
+
+func (p *parser) parseListLiteral(openTok lexer.Token) (ast.Node, error) {
+	var elements []ast.Node
+	for p.peek().Kind != lexer.TK_RBRACKET && !p.atEOF() {
+		elem, err := p.parseExpr(0)
+		if err != nil {
+			return nil, err
+		}
+		elements = append(elements, elem)
+		if p.peek().Kind == lexer.TK_COMMA {
+			p.advance()
+		} else {
+			break
+		}
+	}
+	if p.peek().Kind != lexer.TK_RBRACKET {
+		return nil, p.errorf(p.peek().Line, p.peek().Col, "expected ] to close list literal")
+	}
+	p.advance()
+	return &ast.ListLiteral{Elements: elements, Line: openTok.Line}, nil
+}
+
+func (p *parser) parseMapLiteral(openTok lexer.Token) (ast.Node, error) {
+	var entries []ast.MapEntry
+	for p.peek().Kind != lexer.TK_RBRACE && !p.atEOF() {
+		keyTok := p.advance()
+		if keyTok.Kind != lexer.TK_IDENT {
+			return nil, p.errorf(keyTok.Line, keyTok.Col, "expected identifier key in map literal")
+		}
+		if p.peek().Kind != lexer.TK_COLON {
+			return nil, p.errorf(p.peek().Line, p.peek().Col, "expected ':' after map key")
+		}
+		p.advance()
+		val, err := p.parseExpr(0)
+		if err != nil {
+			return nil, err
+		}
+		entries = append(entries, ast.MapEntry{Key: keyTok.Value, Value: val})
+		if p.peek().Kind == lexer.TK_COMMA {
+			p.advance()
+		} else {
+			break
+		}
+	}
+	if p.peek().Kind != lexer.TK_RBRACE {
+		return nil, p.errorf(p.peek().Line, p.peek().Col, "expected } to close map literal")
+	}
+	p.advance()
+	return &ast.MapLiteral{Entries: entries, Line: openTok.Line}, nil
 }
 
 func (p *parser) parseFilter(value ast.Node) (ast.Node, error) {
@@ -669,7 +693,7 @@ func (p *parser) parseFilter(value ast.Node) (ast.Node, error) {
 
 func infixPrec(k lexer.TokenKind) (int, bool) {
 	switch k {
-	case lexer.TK_IF:
+	case lexer.TK_QUESTION:
 		return 5, true
 	case lexer.TK_OR:
 		return 10, true
@@ -726,6 +750,177 @@ func (p *parser) consumeUntilEndraw(tagStart lexer.Token) (ast.Node, error) {
 		p.advance()
 	}
 	return nil, p.errorf(tagStart.Line, tagStart.Col, "unclosed raw block")
+}
+
+// ─── {% let %} ──────────────────────────────────────────────────────────────
+
+// captureUntilEndTag extracts raw text between the current position and {% tagName %}.
+// It consumes all tokens up to (but not including) the end tag.
+func (p *parser) captureUntilEndTag(tagName string) (string, error) {
+	var buf strings.Builder
+	for !p.atEOF() {
+		if p.peek().Kind == lexer.TK_TAG_START {
+			if p.pos+1 < len(p.tokens) {
+				name, ok := tokenTagName(p.tokens[p.pos+1])
+				if ok && name == tagName {
+					return buf.String(), nil
+				}
+			}
+		}
+		if p.peek().Kind == lexer.TK_TEXT {
+			buf.WriteString(p.peek().Value)
+		}
+		p.advance()
+	}
+	return buf.String(), nil
+}
+
+func (p *parser) parseLet(tagStart lexer.Token) (*ast.LetNode, error) {
+	p.advance() // consume "let"
+	if err := p.expectTagEnd(); err != nil {
+		return nil, err
+	}
+	raw, err := p.captureUntilEndTag("endlet")
+	if err != nil {
+		return nil, err
+	}
+	if err := p.expectTag("endlet"); err != nil {
+		return nil, err
+	}
+	tokens, err := lexer.TokenizeLetBody(raw)
+	if err != nil {
+		return nil, p.errorf(tagStart.Line, tagStart.Col, "let block: %v", err)
+	}
+	body, err := parseLetBody(tokens, tagStart.Line)
+	if err != nil {
+		return nil, &groverrors.ParseError{
+			Line:    tagStart.Line,
+			Column:  tagStart.Col,
+			Message: err.Error(),
+		}
+	}
+	return &ast.LetNode{Body: body, Line: tagStart.Line}, nil
+}
+
+// ─── let block mini-parser ──────────────────────────────────────────────────
+
+type letParser struct {
+	tokens []lexer.Token
+	pos    int
+}
+
+func (lp *letParser) peek() lexer.Token {
+	if lp.pos >= len(lp.tokens) {
+		return lexer.Token{Kind: lexer.TK_EOF}
+	}
+	return lp.tokens[lp.pos]
+}
+
+func (lp *letParser) advance() lexer.Token {
+	tok := lp.peek()
+	if lp.pos < len(lp.tokens) {
+		lp.pos++
+	}
+	return tok
+}
+
+func parseLetBody(tokens []lexer.Token, baseLine int) ([]ast.LetStmt, error) {
+	lp := &letParser{tokens: tokens}
+	return lp.parseStatements()
+}
+
+func (lp *letParser) parseStatements() ([]ast.LetStmt, error) {
+	var stmts []ast.LetStmt
+	for lp.peek().Kind != lexer.TK_EOF {
+		tk := lp.peek()
+		if tk.Kind == lexer.TK_IDENT {
+			switch tk.Value {
+			case "if":
+				ifNode, err := lp.parseIf()
+				if err != nil {
+					return nil, err
+				}
+				stmts = append(stmts, ifNode)
+			case "end", "elif", "else":
+				return stmts, nil
+			default:
+				assign, err := lp.parseAssignment()
+				if err != nil {
+					return nil, err
+				}
+				stmts = append(stmts, assign)
+			}
+		} else {
+			return nil, fmt.Errorf("let block line %d: unexpected token %q", tk.Line, tk.Value)
+		}
+	}
+	return stmts, nil
+}
+
+func (lp *letParser) parseAssignment() (*ast.LetAssignment, error) {
+	nameTok := lp.advance()
+	if lp.peek().Kind != lexer.TK_ASSIGN {
+		return nil, fmt.Errorf("let block line %d: expected '=' after %q", nameTok.Line, nameTok.Value)
+	}
+	lp.advance() // consume =
+	subP := &parser{tokens: lp.tokens, pos: lp.pos}
+	expr, err := subP.parseExpr(0)
+	if err != nil {
+		return nil, fmt.Errorf("let block line %d: %v", nameTok.Line, err)
+	}
+	lp.pos = subP.pos
+	return &ast.LetAssignment{Name: nameTok.Value, Expr: expr}, nil
+}
+
+func (lp *letParser) parseIf() (*ast.LetIf, error) {
+	lp.advance() // consume "if"
+	subP := &parser{tokens: lp.tokens, pos: lp.pos}
+	cond, err := subP.parseExpr(0)
+	if err != nil {
+		return nil, err
+	}
+	lp.pos = subP.pos
+
+	body, err := lp.parseStatements()
+	if err != nil {
+		return nil, err
+	}
+
+	node := &ast.LetIf{Condition: cond, Body: body}
+
+	for {
+		tk := lp.peek()
+		if tk.Kind == lexer.TK_IDENT && tk.Value == "elif" {
+			lp.advance()
+			subP := &parser{tokens: lp.tokens, pos: lp.pos}
+			elifCond, err := subP.parseExpr(0)
+			if err != nil {
+				return nil, err
+			}
+			lp.pos = subP.pos
+			elifBody, err := lp.parseStatements()
+			if err != nil {
+				return nil, err
+			}
+			node.Elifs = append(node.Elifs, ast.LetElif{Condition: elifCond, Body: elifBody})
+		} else if tk.Kind == lexer.TK_IDENT && tk.Value == "else" {
+			lp.advance()
+			elseBody, err := lp.parseStatements()
+			if err != nil {
+				return nil, err
+			}
+			node.Else = elseBody
+			break
+		} else {
+			break
+		}
+	}
+
+	if lp.peek().Kind != lexer.TK_IDENT || lp.peek().Value != "end" {
+		return nil, fmt.Errorf("let block: expected 'end' to close if, got %q", lp.peek().Value)
+	}
+	lp.advance()
+	return node, nil
 }
 
 // expectTagEnd consumes the closing %} of the current tag.
@@ -792,9 +987,9 @@ func (p *parser) errorf(line, col int, format string, args ...any) *groverrors.P
 // These are tags that are always needed as syntactic closers (e.g. endif, endfor, else, etc.).
 func isCloseTag(name string) bool {
 	switch name {
-	case "endif", "endfor", "endunless", "endwith", "endcapture", "endmacro", "endcall",
+	case "endif", "endfor", "endcapture", "endmacro", "endcall",
 		"endblock", "endslot", "endcomponent", "endfill", "endhoist",
-		"else", "elif", "empty", "endraw":
+		"endlet", "else", "elif", "empty", "endraw":
 		return true
 	}
 	return false
@@ -926,68 +1121,51 @@ func (p *parser) parseCall(tagStart lexer.Token) (*ast.CallNode, error) {
 	}, nil
 }
 
-// parseWithVars parses an optional "with key=val, key2=val2" clause.
-// Stops at tag end or "isolated" keyword.
-func (p *parser) parseWithVars() ([]ast.NamedArgNode, error) {
-	if p.peek().Kind != lexer.TK_IDENT || p.peek().Value != "with" {
-		return nil, nil
-	}
-	p.advance() // consume "with"
+// parseIncludeVars parses optional space-separated key=value pairs.
+func (p *parser) parseIncludeVars() ([]ast.NamedArgNode, error) {
 	var vars []ast.NamedArgNode
-	for p.peek().Kind != lexer.TK_TAG_END && !p.atEOF() {
-		if p.peek().Kind == lexer.TK_IDENT && p.peek().Value == "isolated" {
+	for p.peek().Kind == lexer.TK_IDENT && !p.atEOF() {
+		keyTok := p.peek()
+		if p.pos+1 < len(p.tokens) && p.tokens[p.pos+1].Kind == lexer.TK_ASSIGN {
+			p.advance() // consume key
+			p.advance() // consume =
+			val, err := p.parseExpr(0)
+			if err != nil {
+				return nil, err
+			}
+			vars = append(vars, ast.NamedArgNode{Key: keyTok.Value, Value: val, Line: keyTok.Line})
+		} else {
 			break
-		}
-		keyTok := p.advance()
-		if keyTok.Kind != lexer.TK_IDENT {
-			return nil, p.errorf(keyTok.Line, keyTok.Col, "expected variable name in with clause")
-		}
-		if p.peek().Kind != lexer.TK_ASSIGN {
-			return nil, p.errorf(p.peek().Line, p.peek().Col, "expected = after variable name in with clause")
-		}
-		p.advance() // consume =
-		val, err := p.parseExpr(0)
-		if err != nil {
-			return nil, err
-		}
-		vars = append(vars, ast.NamedArgNode{Key: keyTok.Value, Value: val, Line: keyTok.Line})
-		if p.peek().Kind == lexer.TK_COMMA {
-			p.advance()
 		}
 	}
 	return vars, nil
 }
 
-// parseInclude parses {% include "name" [with k=v, ...] [isolated] %}.
+// parseInclude parses {% include "name" [k=v ...] %}.
 func (p *parser) parseInclude(tagStart lexer.Token) (*ast.IncludeNode, error) {
 	p.advance() // consume "include"
 	nameTok := p.advance()
 	if nameTok.Kind != lexer.TK_STRING {
 		return nil, p.errorf(nameTok.Line, nameTok.Col, "expected quoted template name after include")
 	}
-	withVars, err := p.parseWithVars()
+	withVars, err := p.parseIncludeVars()
 	if err != nil {
 		return nil, err
-	}
-	isolated := false
-	if p.peek().Kind == lexer.TK_IDENT && p.peek().Value == "isolated" {
-		p.advance()
-		isolated = true
 	}
 	if err := p.expectTagEnd(); err != nil {
 		return nil, err
 	}
-	return &ast.IncludeNode{Name: nameTok.Value, WithVars: withVars, Isolated: isolated, Line: tagStart.Line}, nil
+	return &ast.IncludeNode{Name: nameTok.Value, WithVars: withVars, Line: tagStart.Line}, nil
 }
 
-// parseRender parses {% render "name" [with k=v, ...] %} — always isolated.
+// parseRender parses {% render "name" [k=v ...] %} — always isolated.
 func (p *parser) parseRender(tagStart lexer.Token) (*ast.RenderNode, error) {
 	p.advance() // consume "render"
 	nameTok := p.advance()
 	if nameTok.Kind != lexer.TK_STRING {
 		return nil, p.errorf(nameTok.Line, nameTok.Col, "expected quoted template name after render")
 	}
-	withVars, err := p.parseWithVars()
+	withVars, err := p.parseIncludeVars()
 	if err != nil {
 		return nil, err
 	}

@@ -15,8 +15,7 @@ func filterLength(v vm.Value, _ []vm.Value) (vm.Value, error) {
 		lst, _ := v.AsList()
 		return vm.IntVal(int64(len(lst))), nil
 	case vm.TypeMap:
-		m, _ := v.AsMap()
-		return vm.IntVal(int64(len(m))), nil
+		return vm.IntVal(int64(v.MapLen())), nil
 	default:
 		return vm.IntVal(int64(len([]rune(v.String())))), nil
 	}
@@ -220,6 +219,14 @@ func filterFlatten(v vm.Value, _ []vm.Value) (vm.Value, error) {
 }
 
 func filterKeys(v vm.Value, _ []vm.Value) (vm.Value, error) {
+	if om, ok := v.AsOrderedMap(); ok {
+		keys := om.Keys()
+		vals := make([]vm.Value, len(keys))
+		for i, k := range keys {
+			vals[i] = vm.StringVal(k)
+		}
+		return vm.ListVal(vals), nil
+	}
 	m, ok := v.AsMap()
 	if !ok {
 		return vm.ListVal(nil), fmt.Errorf("keys filter requires a map")
@@ -237,6 +244,15 @@ func filterKeys(v vm.Value, _ []vm.Value) (vm.Value, error) {
 }
 
 func filterValues(v vm.Value, _ []vm.Value) (vm.Value, error) {
+	if om, ok := v.AsOrderedMap(); ok {
+		keys := om.Keys()
+		vals := make([]vm.Value, len(keys))
+		for i, k := range keys {
+			raw, _ := om.Get(k)
+			vals[i] = vm.FromAny(raw)
+		}
+		return vm.ListVal(vals), nil
+	}
 	m, ok := v.AsMap()
 	if !ok {
 		return vm.ListVal(nil), fmt.Errorf("values filter requires a map")

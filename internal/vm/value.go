@@ -34,6 +34,37 @@ type loopVarData struct {
 	parent *loopVarData // nil if depth == 1
 }
 
+// OrderedMap preserves insertion order for map literals.
+type OrderedMap struct {
+	keys []string
+	vals map[string]any
+}
+
+// NewOrderedMap creates an empty OrderedMap with the given capacity.
+func NewOrderedMap(cap int) *OrderedMap {
+	return &OrderedMap{keys: make([]string, 0, cap), vals: make(map[string]any, cap)}
+}
+
+// Set adds or updates a key-value pair, preserving insertion order.
+func (m *OrderedMap) Set(key string, val any) {
+	if _, exists := m.vals[key]; !exists {
+		m.keys = append(m.keys, key)
+	}
+	m.vals[key] = val
+}
+
+// Get retrieves a value by key.
+func (m *OrderedMap) Get(key string) (any, bool) {
+	v, ok := m.vals[key]
+	return v, ok
+}
+
+// Len returns the number of entries.
+func (m *OrderedMap) Len() int { return len(m.keys) }
+
+// Keys returns the keys in insertion order.
+func (m *OrderedMap) Keys() []string { return m.keys }
+
 // Value is the runtime value type. Zero value is Nil.
 type Value struct {
 	typ  ValueType
@@ -67,6 +98,7 @@ func StringVal(s string) Value            { return Value{typ: TypeString, sval: 
 func SafeHTMLVal(s string) Value          { return Value{typ: TypeSafeHTML, sval: s} }
 func ListVal(items []Value) Value         { return Value{typ: TypeList, oval: items} }
 func MapVal(m map[string]any) Value       { return Value{typ: TypeMap, oval: m} }
+func OrderedMapVal(m *OrderedMap) Value   { return Value{typ: TypeMap, oval: m} }
 func ResolvableVal(r Resolvable) Value    { return Value{typ: TypeResolvable, oval: r} }
 func MacroVal(m *compiler.MacroDef) Value { return Value{typ: TypeMacro, oval: m} }
 func loopVarVal(d *loopVarData) Value     { return Value{typ: TypeLoopVar, oval: d} }
@@ -120,12 +152,50 @@ func (v Value) AsList() ([]Value, bool) {
 }
 
 // AsMap returns the underlying map[string]any and true for TypeMap, else nil and false.
+// For OrderedMap values, returns the underlying map (loses ordering info — use AsOrderedMap for ordered access).
 func (v Value) AsMap() (map[string]any, bool) {
 	if v.typ != TypeMap {
 		return nil, false
 	}
-	m, ok := v.oval.(map[string]any)
+	switch m := v.oval.(type) {
+	case map[string]any:
+		return m, true
+	case *OrderedMap:
+		return m.vals, true
+	}
+	return nil, false
+}
+
+// AsOrderedMap returns the *OrderedMap if this is an ordered map, else nil and false.
+func (v Value) AsOrderedMap() (*OrderedMap, bool) {
+	if v.typ != TypeMap {
+		return nil, false
+	}
+	m, ok := v.oval.(*OrderedMap)
 	return m, ok
+}
+
+// MapLen returns the number of entries in a map value.
+func (v Value) MapLen() int {
+	switch m := v.oval.(type) {
+	case map[string]any:
+		return len(m)
+	case *OrderedMap:
+		return m.Len()
+	}
+	return 0
+}
+
+// MapGet retrieves a value from a map by key, regardless of underlying type.
+func (v Value) MapGet(key string) (any, bool) {
+	switch m := v.oval.(type) {
+	case map[string]any:
+		val, ok := m[key]
+		return val, ok
+	case *OrderedMap:
+		return m.Get(key)
+	}
+	return nil, false
 }
 
 // AsMacroDef returns the *compiler.MacroDef and true for TypeMacro, else nil and false.
@@ -159,10 +229,7 @@ func Truthy(v Value) bool {
 		}
 		return false
 	case TypeMap:
-		if m, ok := v.oval.(map[string]any); ok {
-			return len(m) > 0
-		}
-		return false
+		return v.MapLen() > 0
 	case TypeResolvable:
 		return v.oval != nil
 	case TypeLoopVar:
@@ -255,6 +322,8 @@ func FromAny(v any) Value {
 		return ListVal(vals)
 	case map[string]any:
 		return MapVal(x)
+	case *OrderedMap:
+		return OrderedMapVal(x)
 	default:
 		// Try Resolvable via interface assertion
 		if r, ok := v.(Resolvable); ok {
@@ -285,8 +354,7 @@ func FromAny(v any) Value {
 func GetAttr(obj Value, name string, strict bool) (Value, error) {
 	switch obj.typ {
 	case TypeMap:
-		m, _ := obj.oval.(map[string]any)
-		if v, ok := m[name]; ok {
+		if v, ok := obj.MapGet(name); ok {
 			return FromAny(v), nil
 		}
 		if strict {
@@ -353,9 +421,8 @@ func GetIndex(obj, key Value) (Value, error) {
 		}
 		return lst[idx], nil
 	case TypeMap:
-		m, _ := obj.oval.(map[string]any)
 		k := key.String()
-		if v, ok := m[k]; ok {
+		if v, ok := obj.MapGet(k); ok {
 			return FromAny(v), nil
 		}
 		return Nil, nil
