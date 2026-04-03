@@ -49,7 +49,7 @@ No Makefile, linter config, or CI pipeline exists. Use `gofmt` for formatting.
 
 ## Template features
 
-Variables, filters (pipe syntax), arithmetic/comparison/logical expressions, `if`/`elif`/`else`, `unless`, `for`/`empty`, `range`, `set`, `with`, `capture`, macros (`macro`/`call`), includes (`include`/`render`/`import`), layout inheritance (`extends`/`block`/`super()`), components with slots (`component`/`slot`/`fill`), and web primitives (`asset`/`meta`/`hoist`).
+Variables, filters (pipe syntax), arithmetic/comparison/logical expressions (including ternary `? :`), `if`/`elif`/`else`, `for`/`empty`, `range`, `set`, `let` (multi-variable assignment block), `capture`, list/map literals, macros (`macro`/`call`), includes (`include`/`render`/`import`), layout inheritance (`extends`/`block`/`super()`), components with slots (`component`/`slot`/`fill`), and web primitives (`asset`/`meta`/`hoist`).
 
 ## Testing
 
