@@ -935,13 +935,22 @@ func (v *VM) run(ctx context.Context, bc *compiler.Bytecode) (string, error) {
 
 		case compiler.OP_BUILD_MAP:
 			count := int(instr.A)
-			m := make(map[string]any, count)
+			// Pop key/value pairs (in reverse stack order) then insert in source order.
+			type kv struct {
+				k string
+				v Value
+			}
+			pairs := make([]kv, count)
 			for i := count - 1; i >= 0; i-- {
 				val := v.pop()
 				key := v.pop()
-				m[key.String()] = val
+				pairs[i] = kv{key.String(), val}
 			}
-			v.push(MapVal(m))
+			m := NewOrderedMap(count)
+			for _, p := range pairs {
+				m.Set(p.k, p.v)
+			}
+			v.push(OrderedMapVal(m))
 
 		default:
 			return "", fmt.Errorf("vm: unknown opcode %d at ip=%d", instr.Op, ip-1)
@@ -998,6 +1007,15 @@ func (v *VM) makeLoopState(coll Value) (loopState, bool) {
 		lst, _ := coll.oval.([]Value)
 		return loopState{items: lst}, true
 	case TypeMap:
+		if om, ok := coll.oval.(*OrderedMap); ok {
+			keys := om.Keys()
+			vals := make([]Value, len(keys))
+			for i, k := range keys {
+				v, _ := om.Get(k)
+				vals[i] = FromAny(v)
+			}
+			return loopState{items: vals, keys: keys, isMap: true}, true
+		}
 		m, _ := coll.oval.(map[string]any)
 		keys := make([]string, 0, len(m))
 		for k := range m {

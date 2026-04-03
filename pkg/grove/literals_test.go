@@ -96,6 +96,30 @@ func TestListInMap(t *testing.T) {
 	require.Equal(t, "1,2,3", got)
 }
 
+func TestMapLiteral_InsertionOrder(t *testing.T) {
+	eng := newEngine(t)
+	got := render(t, eng,
+		`{% for k, v in {z: 1, a: 2, m: 3} %}{{ k }}={{ v }},{% endfor %}`,
+		grove.Data{})
+	require.Equal(t, "z=1,a=2,m=3,", got)
+}
+
+func TestMapLiteral_KeysFilterOrder(t *testing.T) {
+	eng := newEngine(t)
+	got := render(t, eng,
+		`{{ {c: 1, a: 2, b: 3} | keys | join(",") }}`,
+		grove.Data{})
+	require.Equal(t, "c,a,b", got)
+}
+
+func TestMapLiteral_ValuesFilterOrder(t *testing.T) {
+	eng := newEngine(t)
+	got := render(t, eng,
+		`{{ {c: "x", a: "y", b: "z"} | values | join(",") }}`,
+		grove.Data{})
+	require.Equal(t, "x,y,z", got)
+}
+
 func TestMapInList(t *testing.T) {
 	eng := newEngine(t)
 	got := render(t, eng,
