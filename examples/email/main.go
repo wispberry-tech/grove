@@ -137,9 +137,10 @@ var templateSources = map[string]string{
 {% import "helpers.grov" as h %}
 
 {% block preheader %}
-  {% hoist target="preheader" %}Welcome aboard, {{ user.name }}! Here's how to get started.{% endhoist %}
+  {% capture preheader_text %}Welcome aboard, {{ user.name }}! Here's how to get started.{% endcapture %}
+  {% hoist target="preheader" %}{{ preheader_text }}{% endhoist %}
   <div style="display: none; max-height: 0; overflow: hidden;">
-    {{ "preheader" | hoist_content }}
+    {{ preheader_text }}
   </div>
 {% endblock %}
 
@@ -166,9 +167,10 @@ var templateSources = map[string]string{
 {% import "helpers.grov" as h %}
 
 {% block preheader %}
-  {% hoist target="preheader" %}Order {{ order.id }} confirmed — thanks for your purchase!{% endhoist %}
+  {% capture preheader_text %}Order {{ order.id }} confirmed — thanks for your purchase!{% endcapture %}
+  {% hoist target="preheader" %}{{ preheader_text }}{% endhoist %}
   <div style="display: none; max-height: 0; overflow: hidden;">
-    {{ "preheader" | hoist_content }}
+    {{ preheader_text }}
   </div>
 {% endblock %}
 

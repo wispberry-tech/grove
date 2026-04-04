@@ -9,9 +9,9 @@
 <h1 style="margin: 0 0 1.5rem;">Products</h1>
 <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 1.5rem;">
   {% for product in products %}
-    {% set price_html %}
+    {% capture price_html %}
       {{ pricing.price(product.price, product.sale_price) }}
-    {% endset %}
+    {% endcapture %}
     {% component "components/product-card.grov" name=product.name slug=product.slug image_url=product.image_url price_display=price_html %}
       {% fill "badge" %}
         {% if product.on_sale %}
