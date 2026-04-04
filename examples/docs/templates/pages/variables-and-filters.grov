@@ -12,9 +12,9 @@
 {% endlet %}
 
 <h1 style="margin: 0 0 0.5rem;">{{ title }}</h1>
-<p style="color: #888; margin: 0 0 2rem; font-size: 0.9rem;">{{ section }}</p>
+<p class="text-muted text-small" style="margin: 0 0 2rem;">{{ section }}</p>
 
-<article style="line-height: 1.7;">
+<article class="article">
   {{ page.body | safe }}
 </article>
 
@@ -31,11 +31,11 @@
 
 {% for category in filter_categories %}
   <h3 style="margin-top: 1.5rem;">{{ category.name }}</h3>
-  <div style="display: flex; flex-wrap: wrap; gap: 0.5rem;">
+  <div class="flex-row">
     {% for filter in category.filters %}
-      <code style="background: #f3f4f6; padding: 0.2rem 0.6rem; border-radius: 4px; font-size: 0.85rem;">{{ filter }}</code>
+      <code class="code-tag">{{ filter }}</code>
     {% empty %}
-      <span style="color: #888;">No filters in this category.</span>
+      <span class="text-muted">No filters in this category.</span>
     {% endfor %}
   </div>
 {% endfor %}
@@ -44,20 +44,20 @@
 
 <h2 style="margin-top: 2rem;">Pagination Example</h2>
 <p>Here are pages 1 through 5:</p>
-<div style="display: flex; gap: 0.5rem; margin: 1rem 0;">
+<div class="pagination">
   {% for n in range(1, 5) %}
-    <span style="display: inline-block; width: 2rem; height: 2rem; line-height: 2rem; text-align: center; border: 1px solid #ddd; border-radius: 4px; {{ n == 1 ? "background: #e94560; color: #fff; border-color: #e94560;" : "" }}">{{ n }}</span>
+    <span class="page-num {{ n == 1 ? "page-num-active" : "" }}">{{ n }}</span>
   {% endfor %}
 </div>
 
-<div style="display: flex; justify-content: space-between; margin-top: 3rem; padding-top: 1.5rem; border-top: 1px solid #eee;">
+<div class="page-nav">
   {% if prev %}
-    <a href="/docs/{{ prev.section | lower | replace(" ", "-") }}/{{ prev.slug }}" style="color: #e94560; text-decoration: none;">← {{ prev.title }}</a>
+    <a href="/docs/{{ prev.section | lower | replace(" ", "-") }}/{{ prev.slug }}">← {{ prev.title }}</a>
   {% else %}
     <span></span>
   {% endif %}
   {% if next %}
-    <a href="/docs/{{ next.section | lower | replace(" ", "-") }}/{{ next.slug }}" style="color: #e94560; text-decoration: none;">{{ next.title }} →</a>
+    <a href="/docs/{{ next.section | lower | replace(" ", "-") }}/{{ next.slug }}">{{ next.title }} →</a>
   {% endif %}
 </div>
 {% endblock %}

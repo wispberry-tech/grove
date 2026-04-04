@@ -13,17 +13,17 @@
   {% endcomponent %}
 {% endif %}
 
-<article style="background: #fff; border-radius: 8px; padding: 2rem; margin-top: 1rem;">
+<article class="article" style="margin-top: 1rem;">
   <header style="margin-bottom: 1.5rem;">
     <h1 style="margin: 0 0 0.5rem;">{{ post.title }}</h1>
-    <time style="color: #888; font-size: 0.9rem;">{{ post.date }}</time>
-    <div style="display: flex; gap: 0.5rem; margin-top: 0.75rem;">
+    <time>{{ post.date }}</time>
+    <div class="flex-row" style="margin-top: 0.75rem;">
       {% for tag in post.tags %}
         {% component "components/tag.grov" label=tag.name color=tag.color %}{% endcomponent %}
       {% endfor %}
     </div>
   </header>
-  <div style="line-height: 1.7;">
+  <div class="article-body">
     {{ post.body | nl2br | safe }}
   </div>
 </article>

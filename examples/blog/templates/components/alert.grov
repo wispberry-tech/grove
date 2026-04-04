@@ -1,28 +1,20 @@
 {% props type="info" %}
 {% let %}
-  bg = "#d1ecf1"
-  border = "#bee5eb"
-  fg = "#0c5460"
   icon = "ℹ"
+  cls = "alert alert-info"
 
   if type == "warning"
-    bg = "#fff3cd"
-    border = "#ffc107"
-    fg = "#856404"
     icon = "⚠"
+    cls = "alert alert-warning"
   elif type == "error"
-    bg = "#f8d7da"
-    border = "#f5c6cb"
-    fg = "#721c24"
     icon = "✕"
+    cls = "alert alert-error"
   elif type == "success"
-    bg = "#d4edda"
-    border = "#c3e6cb"
-    fg = "#155724"
     icon = "✓"
+    cls = "alert alert-success"
   end
 {% endlet %}
-<div style="padding: 1rem 1.25rem; background: {{ bg }}; border: 1px solid {{ border }}; border-radius: 6px; color: {{ fg }}; display: flex; gap: 0.75rem; align-items: flex-start;">
-  <span style="font-weight: bold; font-size: 1.1rem;">{{ icon }}</span>
+<div class="{{ cls }}">
+  <span class="alert-icon">{{ icon }}</span>
   <div>{% slot %}{% endslot %}</div>
 </div>

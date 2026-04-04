@@ -1,0 +1,252 @@
+/* Grove Store — Global Stylesheet */
+
+:root {
+  /* Brand colors (from logo) */
+  --color-primary: #2E6740;
+  --color-primary-hover: #245533;
+  --color-dark: #251917;
+  --color-cream: #EEEBE3;
+  --color-page-bg: #F7F5F0;
+  --color-text: #3D2E2A;
+  --color-text-muted: #7A6B66;
+  --color-border: #D9D3CB;
+  --color-green-light: #E8F0EA;
+
+  /* Tag colors */
+  --color-tag-red-bg: #FEE2E2;
+  --color-tag-red-text: #991B1B;
+  --color-tag-gray-bg: #EDEBE7;
+  --color-tag-gray-text: #4A3F3A;
+
+  /* Misc */
+  --color-stars: #D4A843;
+  --color-success: #1B5E28;
+
+  /* Spacing */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-pill: 999px;
+}
+
+/* ── Base ──────────────────────────────── */
+
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  color: var(--color-text);
+  background: var(--color-page-bg);
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+a { color: var(--color-primary); }
+
+/* ── Layout ────────────────────────────── */
+
+.container {
+  max-width: 1080px;
+  width: 100%;
+  margin: 0 auto;
+  padding: 2rem 1rem;
+  flex: 1;
+}
+
+.product-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 1.5rem;
+}
+
+/* ── Nav ────────────────────────────────── */
+
+.nav {
+  background: var(--color-dark);
+  padding: 1rem 2rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.nav-brand {
+  color: var(--color-primary);
+  font-size: 1.4rem;
+  font-weight: bold;
+  text-decoration: none;
+}
+
+.nav-links {
+  display: flex;
+  gap: 1.5rem;
+  align-items: center;
+}
+
+.nav-link {
+  color: var(--color-cream);
+  text-decoration: none;
+}
+
+/* ── Footer ────────────────────────────── */
+
+.footer {
+  background: var(--color-dark);
+  color: var(--color-text-muted);
+  padding: 2rem;
+  text-align: center;
+  margin-top: 3rem;
+}
+
+.footer p { margin: 0; }
+.footer a { color: var(--color-primary); }
+
+/* ── Card ───────────────────────────────── */
+
+.card {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  background: var(--color-cream);
+  transition: box-shadow 0.2s;
+}
+
+.card:hover {
+  box-shadow: 0 2px 8px rgba(37, 25, 23, 0.1);
+}
+
+.card img {
+  width: 100%;
+  height: 200px;
+  object-fit: cover;
+}
+
+.card-body { padding: 1rem; }
+
+.card-body h3 { margin: 0 0 0.5rem; }
+
+.card-body h3 a {
+  color: var(--color-dark);
+  text-decoration: none;
+}
+
+/* ── Badge ─────────────────────────────── */
+
+.badge {
+  display: inline-block;
+  margin-top: 0.5rem;
+  padding: 0.2rem 0.6rem;
+  border-radius: var(--radius-pill);
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.badge-sale { background: var(--color-tag-red-bg); color: var(--color-tag-red-text); }
+.badge-stock { background: var(--color-tag-gray-bg); color: var(--color-tag-gray-text); }
+
+/* ── Button ─────────────────────────────── */
+
+.btn {
+  display: inline-block;
+  padding: 0.75rem 2rem;
+  background: var(--color-primary);
+  color: var(--color-cream);
+  border: none;
+  border-radius: var(--radius-md);
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.btn-sm {
+  padding: 0.5rem 1.25rem;
+  font-size: 0.9rem;
+  border: 2px solid var(--color-dark);
+  background: var(--color-dark);
+}
+
+/* ── Breadcrumb ────────────────────────── */
+
+.breadcrumb {
+  font-size: 0.9rem;
+  color: var(--color-text-muted);
+  margin-bottom: 1.5rem;
+}
+
+.breadcrumb a {
+  color: var(--color-primary);
+  text-decoration: none;
+}
+
+/* ── Article / Content ─────────────────── */
+
+.panel {
+  background: var(--color-cream);
+  border-radius: var(--radius-lg);
+  padding: 2rem;
+}
+
+/* ── Table ─────────────────────────────── */
+
+.table-wrap {
+  background: var(--color-cream);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.table thead { background: var(--color-page-bg); text-align: left; }
+.table th { padding: 1rem; }
+.table td { padding: 1rem; }
+.table tbody tr { border-top: 1px solid var(--color-border); }
+
+.table a {
+  color: var(--color-dark);
+  text-decoration: none;
+  font-weight: 600;
+}
+
+/* ── Cart Summary ──────────────────────── */
+
+.cart-summary {
+  margin-top: 1.5rem;
+  background: var(--color-cream);
+  border-radius: var(--radius-lg);
+  padding: 1.5rem;
+  max-width: 360px;
+  margin-left: auto;
+}
+
+.cart-row {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 0.75rem;
+}
+
+.cart-divider {
+  border: none;
+  border-top: 1px solid var(--color-border);
+  margin: 0.75rem 0;
+}
+
+/* ── Pricing ────────────────────────────── */
+
+.price-strike { text-decoration: line-through; color: var(--color-text-muted); }
+.price-sale { color: var(--color-primary); font-weight: bold; }
+.price-regular { font-weight: bold; }
+
+.stars { color: var(--color-stars); letter-spacing: 2px; }
+.review-count { color: var(--color-text-muted); font-size: 0.85rem; }
+
+/* ── Utilities ─────────────────────────── */
+
+.text-muted { color: var(--color-text-muted); }
+.text-accent { color: var(--color-primary); }
+.text-error { color: var(--color-tag-red-text); }
+.text-success { color: var(--color-success); }
+.font-bold { font-weight: 600; }
+.no-decor { text-decoration: none; }

@@ -12,20 +12,20 @@
 {% endlet %}
 
 <h1 style="margin: 0 0 0.5rem;">{{ title }}</h1>
-<p style="color: #888; margin: 0 0 2rem; font-size: 0.9rem;">{{ section }}</p>
+<p class="text-muted text-small" style="margin: 0 0 2rem;">{{ section }}</p>
 
-<article style="line-height: 1.7;">
+<article class="article">
   {{ page.body | safe }}
 </article>
 
-<div style="display: flex; justify-content: space-between; margin-top: 3rem; padding-top: 1.5rem; border-top: 1px solid #eee;">
+<div class="page-nav">
   {% if prev %}
-    <a href="/docs/{{ prev.section | lower | replace(" ", "-") }}/{{ prev.slug }}" style="color: #e94560; text-decoration: none;">← {{ prev.title }}</a>
+    <a href="/docs/{{ prev.section | lower | replace(" ", "-") }}/{{ prev.slug }}">← {{ prev.title }}</a>
   {% else %}
     <span></span>
   {% endif %}
   {% if next %}
-    <a href="/docs/{{ next.section | lower | replace(" ", "-") }}/{{ next.slug }}" style="color: #e94560; text-decoration: none;">{{ next.title }} →</a>
+    <a href="/docs/{{ next.section | lower | replace(" ", "-") }}/{{ next.slug }}">{{ next.title }} →</a>
   {% endif %}
 </div>
 {% endblock %}

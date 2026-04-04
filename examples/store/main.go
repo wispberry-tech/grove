@@ -92,7 +92,7 @@ var products = []Product{
 		Price:       7999,
 		SalePrice:   5999,
 		Description: "Premium over-ear headphones with active noise cancellation, 30-hour battery life, and a comfortable fit for all-day listening.",
-		ImageURL:    "https://placehold.co/400x300/1a1a2e/e94560?text=Headphones",
+		ImageURL:    "https://placehold.co/400x300/251917/2E6740?text=Headphones",
 		Category:    "Electronics",
 		Rating:      4.5,
 		ReviewCount: 128,
@@ -105,7 +105,7 @@ var products = []Product{
 		Price:       12999,
 		SalePrice:   0,
 		Description: "Compact 75% layout with hot-swappable switches, RGB backlighting, and a solid aluminum frame.",
-		ImageURL:    "https://placehold.co/400x300/0f3460/eee?text=Keyboard",
+		ImageURL:    "https://placehold.co/400x300/2E6740/EEEBE3?text=Keyboard",
 		Category:    "Electronics",
 		Rating:      4.8,
 		ReviewCount: 64,
@@ -118,7 +118,7 @@ var products = []Product{
 		Price:       8999,
 		SalePrice:   6499,
 		Description: "Lightweight and responsive running shoes with a breathable mesh upper and cushioned sole.",
-		ImageURL:    "https://placehold.co/400x300/16213e/e94560?text=Shoes",
+		ImageURL:    "https://placehold.co/400x300/251917/2E6740?text=Shoes",
 		Category:    "Footwear",
 		Rating:      4.2,
 		ReviewCount: 203,
@@ -131,7 +131,7 @@ var products = []Product{
 		Price:       3499,
 		SalePrice:   0,
 		Description: "Adjustable LED desk lamp with five brightness levels and a built-in USB charging port.",
-		ImageURL:    "https://placehold.co/400x300/533483/eee?text=Lamp",
+		ImageURL:    "https://placehold.co/400x300/3D2E2A/EEEBE3?text=Lamp",
 		Category:    "Home",
 		Rating:      4.0,
 		ReviewCount: 42,
@@ -169,6 +169,9 @@ func main() {
 	r.Get("/", indexHandler(eng))
 	r.Get("/product/{slug}", productHandler(eng))
 	r.Get("/cart", cartHandler(eng))
+
+	staticDir := filepath.Join(filepath.Dir(thisFile), "static")
+	r.Handle("/static/*", http.StripPrefix("/static/", http.FileServer(http.Dir(staticDir))))
 
 	fmt.Println("Grove Store listening on http://localhost:3001")
 	log.Fatal(http.ListenAndServe(":3001", r))

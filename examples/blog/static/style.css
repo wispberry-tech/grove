@@ -1,0 +1,261 @@
+/* Grove Blog — Global Stylesheet */
+
+:root {
+  /* Brand colors (from logo) */
+  --color-primary: #2E6740;
+  --color-primary-hover: #245533;
+  --color-dark: #251917;
+  --color-cream: #EEEBE3;
+  --color-page-bg: #F7F5F0;
+  --color-text: #3D2E2A;
+  --color-text-muted: #7A6B66;
+  --color-border: #D9D3CB;
+  --color-green-light: #E8F0EA;
+  --color-cream-dark: #DDD8CE;
+
+  /* Alert colors */
+  --color-info-bg: #E8F0EA;
+  --color-info-text: #2E6740;
+  --color-info-border: #2E6740;
+  --color-warning-bg: #FFF3CD;
+  --color-warning-text: #6B5210;
+  --color-warning-border: #E6C547;
+  --color-error-bg: #F8D7DA;
+  --color-error-text: #6B1D24;
+  --color-error-border: #E8A0A7;
+  --color-success-bg: #D4EDDA;
+  --color-success-text: #1B5E28;
+  --color-success-border: #A3D4AE;
+
+  /* Tag colors */
+  --color-tag-green-bg: #E8F0EA;
+  --color-tag-green-text: #2E6740;
+  --color-tag-brown-bg: #F0EAE4;
+  --color-tag-brown-text: #5C3D2E;
+  --color-tag-red-bg: #FEE2E2;
+  --color-tag-red-text: #991B1B;
+  --color-tag-purple-bg: #EDE9FE;
+  --color-tag-purple-text: #5B21B6;
+  --color-tag-orange-bg: #FFEDD5;
+  --color-tag-orange-text: #9A3412;
+  --color-tag-gray-bg: #EDEBE7;
+  --color-tag-gray-text: #4A3F3A;
+
+  /* Spacing */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-pill: 999px;
+}
+
+/* ── Base ──────────────────────────────── */
+
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  color: var(--color-text);
+  background: var(--color-page-bg);
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+a { color: var(--color-primary); }
+
+/* ── Layout ────────────────────────────── */
+
+.container {
+  max-width: 960px;
+  width: 100%;
+  margin: 0 auto;
+  padding: 2rem 1rem;
+  flex: 1;
+}
+
+.grid { display: grid; gap: 1.5rem; }
+
+.flex-row {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+/* ── Nav ────────────────────────────────── */
+
+.nav {
+  background: var(--color-dark);
+  padding: 1rem 2rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.nav-brand {
+  color: var(--color-primary);
+  font-size: 1.4rem;
+  font-weight: bold;
+  text-decoration: none;
+}
+
+.nav-links {
+  display: flex;
+  gap: 1.5rem;
+  align-items: center;
+}
+
+.nav-link {
+  color: var(--color-cream);
+  text-decoration: none;
+}
+
+/* ── Footer ────────────────────────────── */
+
+.footer {
+  background: var(--color-dark);
+  color: var(--color-text-muted);
+  padding: 2rem;
+  text-align: center;
+  margin-top: 3rem;
+}
+
+.footer p { margin: 0; }
+
+.footer a { color: var(--color-primary); }
+
+/* ── Card ──────────────────────────────── */
+
+.card {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: 1.5rem;
+  background: var(--color-cream);
+  transition: box-shadow 0.2s;
+}
+
+.card:hover {
+  box-shadow: 0 2px 8px rgba(37, 25, 23, 0.1);
+}
+
+.card h2 { margin: 0 0 0.5rem; }
+
+.card h2 a {
+  color: var(--color-dark);
+  text-decoration: none;
+}
+
+.card time {
+  color: var(--color-text-muted);
+  font-size: 0.85rem;
+}
+
+.card p {
+  color: var(--color-text-muted);
+  margin: 0.75rem 0;
+}
+
+/* ── Button ────────────────────────────── */
+
+.btn {
+  display: inline-block;
+  padding: 0.5rem 1.25rem;
+  border: 2px solid;
+  border-radius: var(--radius-md);
+  text-decoration: none;
+  font-weight: 600;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+
+.btn-primary {
+  background: var(--color-primary);
+  color: var(--color-cream);
+  border-color: var(--color-primary);
+}
+
+.btn-secondary {
+  background: var(--color-dark);
+  color: var(--color-cream);
+  border-color: var(--color-dark);
+}
+
+.btn-outline {
+  background: transparent;
+  color: var(--color-primary);
+  border-color: var(--color-primary);
+}
+
+.btn-default {
+  background: var(--color-text-muted);
+  color: var(--color-cream);
+  border-color: var(--color-text-muted);
+}
+
+/* ── Tag ────────────────────────────────── */
+
+.tag {
+  display: inline-block;
+  padding: 0.2rem 0.6rem;
+  border-radius: var(--radius-pill);
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.tag-green  { background: var(--color-tag-green-bg);  color: var(--color-tag-green-text); }
+.tag-brown  { background: var(--color-tag-brown-bg);  color: var(--color-tag-brown-text); }
+.tag-red    { background: var(--color-tag-red-bg);    color: var(--color-tag-red-text); }
+.tag-purple { background: var(--color-tag-purple-bg); color: var(--color-tag-purple-text); }
+.tag-orange { background: var(--color-tag-orange-bg); color: var(--color-tag-orange-text); }
+.tag-gray   { background: var(--color-tag-gray-bg);   color: var(--color-tag-gray-text); }
+
+/* ── Alert ──────────────────────────────── */
+
+.alert {
+  padding: 1rem 1.25rem;
+  border: 1px solid;
+  border-radius: var(--radius-md);
+  display: flex;
+  gap: 0.75rem;
+  align-items: flex-start;
+}
+
+.alert-icon {
+  font-weight: bold;
+  font-size: 1.1rem;
+}
+
+.alert-info    { background: var(--color-info-bg);    border-color: var(--color-info-border);    color: var(--color-info-text); }
+.alert-warning { background: var(--color-warning-bg); border-color: var(--color-warning-border); color: var(--color-warning-text); }
+.alert-error   { background: var(--color-error-bg);   border-color: var(--color-error-border);   color: var(--color-error-text); }
+.alert-success { background: var(--color-success-bg); border-color: var(--color-success-border); color: var(--color-success-text); }
+
+/* ── Article ───────────────────────────── */
+
+.article {
+  background: var(--color-cream);
+  border-radius: var(--radius-lg);
+  padding: 2rem;
+}
+
+.article-body { line-height: 1.7; }
+
+.article time {
+  color: var(--color-text-muted);
+  font-size: 0.9rem;
+}
+
+/* ── Styleguide ────────────────────────── */
+
+.section-heading {
+  border-bottom: 2px solid var(--color-primary);
+  padding-bottom: 0.5rem;
+}
+
+.section-desc { color: var(--color-text-muted); }
+
+/* ── Utilities ──────────────────────────── */
+
+.text-muted { color: var(--color-text-muted); }
+.text-small { font-size: 0.85rem; }
+.text-accent { color: var(--color-primary); }
+.font-bold { font-weight: 600; }
+.no-decor { text-decoration: none; }

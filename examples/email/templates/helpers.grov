@@ -1,0 +1,13 @@
+{% macro button(text, href, color) %}
+  {% if not color %}{% set color = "#2E6740" %}{% endif %}
+  <a href="{{ href }}" style="display: inline-block; padding: 12px 24px; background: {{ color }}; color: #ffffff; text-decoration: none; border-radius: 6px; font-weight: 600;">{{ text }}</a>
+{% endmacro %}
+
+{% macro divider() %}
+  <hr style="border: none; border-top: 1px solid #D9D3CB; margin: 24px 0;">
+{% endmacro %}
+
+{% macro spacer(height) %}
+  {% if not height %}{% set height = 16 %}{% endif %}
+  <div style="height: {{ height }}px;"></div>
+{% endmacro %}

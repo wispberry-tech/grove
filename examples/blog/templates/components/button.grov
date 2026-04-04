@@ -1,12 +1,12 @@
 {% props label, href="/", variant="primary" %}
 {% if variant == "primary" %}
-  {% set bg = "#e94560" %}{% set fg = "#fff" %}
+  {% set cls = "btn btn-primary" %}
 {% elif variant == "secondary" %}
-  {% set bg = "#0f3460" %}{% set fg = "#fff" %}
+  {% set cls = "btn btn-secondary" %}
 {% elif variant == "outline" %}
-  {% set bg = "transparent" %}{% set fg = "#e94560" %}
+  {% set cls = "btn btn-outline" %}
 {% else %}
-  {% set bg = "#6c757d" %}{% set fg = "#fff" %}
+  {% set cls = "btn btn-default" %}
 {% endif %}
 
-<a href="{{ href }}" style="display: inline-block; padding: 0.5rem 1.25rem; background: {{ bg }}; color: {{ fg }}; border: 2px solid {{ variant != "outline" ? bg : "#e94560" }}; border-radius: 6px; text-decoration: none; font-weight: 600; font-size: 0.9rem;">{{ label }}</a>
+<a href="{{ href }}" class="{{ cls }}">{{ label }}</a>

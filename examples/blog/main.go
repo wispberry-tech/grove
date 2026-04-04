@@ -113,6 +113,9 @@ func main() {
 	r.Get("/post/{slug}", postHandler(eng))
 	r.Get("/styleguide", styleguideHandler(eng))
 
+	staticDir := filepath.Join(filepath.Dir(thisFile), "static")
+	r.Handle("/static/*", http.StripPrefix("/static/", http.FileServer(http.Dir(staticDir))))
+
 	fmt.Println("Grove Blog listening on http://localhost:3000")
 	log.Fatal(http.ListenAndServe(":3000", r))
 }

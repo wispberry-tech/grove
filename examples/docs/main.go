@@ -109,6 +109,9 @@ func main() {
 	})
 	r.Get("/docs/{section}/{page}", pageHandler(eng))
 
+	staticDir := filepath.Join(filepath.Dir(thisFile), "static")
+	r.Handle("/static/*", http.StripPrefix("/static/", http.FileServer(http.Dir(staticDir))))
+
 	fmt.Println("Grove Docs listening on http://localhost:3003")
 	log.Fatal(http.ListenAndServe(":3003", r))
 }

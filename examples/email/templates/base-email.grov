@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    body { margin: 0; padding: 0; background: #F7F5F0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
+    .wrapper { max-width: 600px; margin: 0 auto; background: #ffffff; }
+  </style>
+</head>
+<body>
+  {% block preheader %}{% endblock %}
+  <div class="wrapper">
+    <div style="background: #251917; padding: 24px; text-align: center;">
+      <span style="color: #2E6740; font-size: 24px; font-weight: bold;">Grove Store</span>
+    </div>
+    <div style="padding: 32px 24px;">
+      {% block body %}{% endblock %}
+    </div>
+    <div style="background: #F7F5F0; padding: 24px; text-align: center; color: #7A6B66; font-size: 12px;">
+      {% block footer %}
+        <p>&copy; 2026 Grove Store. You received this email because you have an account with us.</p>
+      {% endblock %}
+    </div>
+  </div>
+</body>
+</html>

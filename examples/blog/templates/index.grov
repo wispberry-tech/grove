@@ -6,7 +6,7 @@
 {% meta name="description" content="A blog built with the Grove template engine" %}
 
 <h1 style="margin: 0 0 1.5rem;">Latest Posts</h1>
-<div style="display: grid; gap: 1.5rem;">
+<div class="grid">
   {% for post in posts %}
     {% component "components/card.grov" title=post.title summary=post.summary href="/post/" ~ post.slug date=post.date %}
       {% fill "tags" %}
