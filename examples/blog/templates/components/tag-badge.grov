@@ -1,0 +1,6 @@
+{% props label, color="gray", slug="" %}
+{% if slug %}
+  <a href="/tag/{{ slug }}" class="tag tag-{{ color }}">{{ label }}</a>
+{% else %}
+  <span class="tag tag-{{ color }}">{{ label }}</span>
+{% endif %}

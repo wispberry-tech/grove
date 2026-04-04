@@ -3,7 +3,7 @@
   <a href="/" class="nav-brand">{{ site_name }}</a>
   <div class="nav-links">
     <a href="/" class="nav-link">Home</a>
-    <a href="/styleguide" class="nav-link">Components</a>
+    <a href="/tags" class="nav-link">Tags</a>
     {% slot %}{% endslot %}
   </div>
 </nav>

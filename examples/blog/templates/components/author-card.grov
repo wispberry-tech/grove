@@ -1,0 +1,14 @@
+{% props name, slug, bio="", avatar_url="", role="" %}
+<div class="author-card">
+  {% if avatar_url %}
+    <div class="author-avatar">
+      <img src="{{ avatar_url }}" alt="{{ name }}">
+    </div>
+  {% endif %}
+  <div class="author-info">
+    <h3><a href="/author/{{ slug }}">{{ name }}</a></h3>
+    {% if role %}<span class="author-role">{{ role }}</span>{% endif %}
+    {% if bio %}<p class="author-bio">{{ bio }}</p>{% endif %}
+    {% slot %}{% endslot %}
+  </div>
+</div>

@@ -1,0 +1,19 @@
+{% extends "base.grov" %}
+
+{% block title %}Tags &mdash; Grove Blog{% endblock %}
+
+{% block content %}
+{% include "components/breadcrumbs.grov" %}
+
+<h1>Tags</h1>
+<div class="tag-grid">
+  {% for item in tag_counts %}
+    <a href="/tag/{{ item.tag.slug }}" class="tag-card tag-card-{{ item.tag.color }}">
+      <span class="tag-card-name">{{ item.tag.name }}</span>
+      <span class="tag-card-count">{{ item.count }} {{ item.count == 1 ? "post" : "posts" }}</span>
+    </a>
+  {% empty %}
+    <p class="empty-state">No tags yet.</p>
+  {% endfor %}
+</div>
+{% endblock %}

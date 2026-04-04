@@ -1,0 +1,24 @@
+{% extends "base.grov" %}
+
+{% block title %}{{ author.name }} &mdash; Grove Blog{% endblock %}
+
+{% block content %}
+{% include "components/breadcrumbs.grov" %}
+
+{% component "components/author-card.grov" name=author.name slug=author.slug bio=author.bio avatar_url=author.avatar_url role=author.role %}{% endcomponent %}
+
+<h2>Posts by {{ author.name }}</h2>
+<div class="post-grid">
+  {% for post in posts %}
+    {% component "components/card.grov" title=post.title summary=post.summary href="/post/" ~ post.slug date=post.date %}
+      {% fill "tags" %}
+        {% for tag in post.tags %}
+          {% component "components/tag-badge.grov" label=tag.name color=tag.color slug=tag.slug %}{% endcomponent %}
+        {% endfor %}
+      {% endfill %}
+    {% endcomponent %}
+  {% empty %}
+    <p class="empty-state">No posts by this author yet.</p>
+  {% endfor %}
+</div>
+{% endblock %}

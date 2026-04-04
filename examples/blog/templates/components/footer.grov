@@ -1,4 +1,4 @@
 {% props year %}
 <footer class="footer">
-  <p>© {{ year }} Grove Blog. Built with the <a href="#">Grove</a> template engine.</p>
+  <p>&copy; {{ year }} Grove Blog. Built with the <a href="https://github.com/grove">Grove</a> template engine.</p>
 </footer>
