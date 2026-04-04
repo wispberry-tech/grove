@@ -1,9 +1,11 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -14,161 +16,228 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 )
 
-// DocPage represents a single documentation page.
+// --- Types ---
+
+type Section struct {
+	Name        string `json:"name"`
+	Slug        string `json:"slug"`
+	Description string `json:"description"`
+	Order       int    `json:"order"`
+}
+
+func (s Section) GroveResolve(key string) (any, bool) {
+	switch key {
+	case "name":
+		return s.Name, true
+	case "slug":
+		return s.Slug, true
+	case "description":
+		return s.Description, true
+	case "order":
+		return s.Order, true
+	}
+	return nil, false
+}
+
 type DocPage struct {
-	Title   string
-	Section string
-	Slug    string
-	Body    string
+	Title       string `json:"title"`
+	Slug        string `json:"slug"`
+	SectionSlug string `json:"section_slug"`
+	Order       int    `json:"order"`
+	Body        string `json:"body"`
 }
 
 func (d DocPage) GroveResolve(key string) (any, bool) {
 	switch key {
 	case "title":
 		return d.Title, true
-	case "section":
-		return d.Section, true
 	case "slug":
 		return d.Slug, true
+	case "section_slug":
+		return d.SectionSlug, true
+	case "section":
+		if s, ok := sectionMap[d.SectionSlug]; ok {
+			return s, true
+		}
+		return nil, false
+	case "order":
+		return d.Order, true
 	case "body":
 		return d.Body, true
 	}
 	return nil, false
 }
 
-var sections = []string{"Getting Started", "Templates"}
-
-var pages = []DocPage{
-	{
-		Title:   "Installation",
-		Section: "Getting Started",
-		Slug:    "installation",
-		Body:    "Install Grove by adding it as a Go module dependency:\n\n<pre><code>go get grove</code></pre>\n\nGrove requires Go 1.24 or later. It has zero runtime dependencies — the only external package is testify, used for tests.",
-	},
-	{
-		Title:   "Quick Start",
-		Section: "Getting Started",
-		Slug:    "quick-start",
-		Body:    "Create an engine, add a template, and render it:\n\n<pre><code>store := grove.NewMemoryStore()\nstore.Set(\"hello.grov\", \"Hello, {{ name }}!\")\neng := grove.New(grove.WithStore(store))\nresult, _ := eng.Render(ctx, \"hello.grov\", grove.Data{\"name\": \"world\"})\nfmt.Println(result.Body) // Hello, world!</code></pre>",
-	},
-	{
-		Title:   "Variables & Filters",
-		Section: "Templates",
-		Slug:    "variables-and-filters",
-		Body:    "Output a variable with double curly braces: <code>{{ name }}</code>. Apply filters with the pipe operator: <code>{{ name | upper }}</code>.\n\nGrove includes 40+ built-in filters for strings, collections, numbers, and HTML. Chain multiple filters: <code>{{ title | lower | truncate(50) }}</code>.",
-	},
-	{
-		Title:   "Control Flow",
-		Section: "Templates",
-		Slug:    "control-flow",
-		Body:    "Use <code>if</code>, <code>elif</code>, and <code>else</code> for conditionals:\n\n<pre><code>{% if user.admin %}\n  Admin panel\n{% elif user.moderator %}\n  Mod tools\n{% else %}\n  Standard view\n{% endif %}</code></pre>\n\nLoop with <code>for</code> and handle empty lists with <code>empty</code>:\n\n<pre><code>{% for item in items %}\n  {{ item.name }}\n{% empty %}\n  No items found.\n{% endfor %}</code></pre>",
-	},
-	{
-		Title:   "Template Inheritance",
-		Section: "Templates",
-		Slug:    "template-inheritance",
-		Body:    "Define a base layout with <code>block</code> tags, then extend it in child templates. Child templates override blocks; use <code>super()</code> to include the parent's content.\n\nGrove supports unlimited inheritance depth — a child can extend a parent that extends a grandparent.",
-	},
+type FilterEntry struct {
+	Name          string `json:"name"`
+	Description   string `json:"description"`
+	Category      string `json:"category"`
+	ExampleInput  string `json:"example_input"`
+	ExampleOutput string `json:"example_output"`
 }
 
-func main() {
-	_, thisFile, _, _ := runtime.Caller(0)
-	templateDir := filepath.Join(filepath.Dir(thisFile), "templates")
+func (f FilterEntry) GroveResolve(key string) (any, bool) {
+	switch key {
+	case "name":
+		return f.Name, true
+	case "description":
+		return f.Description, true
+	case "category":
+		return f.Category, true
+	case "example_input":
+		return f.ExampleInput, true
+	case "example_output":
+		return f.ExampleOutput, true
+	}
+	return nil, false
+}
 
-	fsStore := grove.NewFileSystemStore(templateDir)
-	eng := grove.New(
-		grove.WithStore(fsStore),
-		grove.WithSandbox(grove.SandboxConfig{
-			AllowedTags:    []string{"if", "elif", "else", "for", "empty", "set", "let", "block", "extends", "include", "render", "import", "component", "slot", "fill", "props", "macro", "call", "capture", "range", "asset", "meta", "hoist"},
-			AllowedFilters: []string{"upper", "lower", "title", "default", "truncate", "length", "join", "split", "replace", "trim", "nl2br", "safe", "floor", "ceil", "abs", "date"},
-			MaxLoopIter:    500,
-		}),
-	)
-	eng.SetGlobal("site_name", "Grove Docs")
-	eng.SetGlobal("current_year", "2026")
+// --- Data ---
 
-	// Build sections data for sidebar.
-	sectionsAny := make([]any, len(sections))
+var (
+	sections     []Section
+	sectionMap   map[string]Section
+	pages        []DocPage
+	pageMap      map[string]DocPage // keyed by slug
+	orderedPages []DocPage          // all pages in section-then-page order
+	filterList   []FilterEntry
+)
+
+func loadJSON(baseDir, filename string, v any) {
+	data, err := os.ReadFile(filepath.Join(baseDir, "data", filename))
+	if err != nil {
+		log.Fatalf("Failed to load %s: %v", filename, err)
+	}
+	if err := json.Unmarshal(data, v); err != nil {
+		log.Fatalf("Failed to parse %s: %v", filename, err)
+	}
+}
+
+func loadData(baseDir string) {
+	loadJSON(baseDir, "sections.json", &sections)
+	loadJSON(baseDir, "pages.json", &pages)
+	loadJSON(baseDir, "filters.json", &filterList)
+
+	sectionMap = make(map[string]Section)
+	for _, s := range sections {
+		sectionMap[s.Slug] = s
+	}
+
+	pageMap = make(map[string]DocPage)
+	for _, p := range pages {
+		pageMap[p.Slug] = p
+	}
+
+	// Build ordered page list: sort by section order then page order.
+	orderedPages = make([]DocPage, len(pages))
+	copy(orderedPages, pages)
+	// Simple insertion sort by (section.order, page.order)
+	for i := 1; i < len(orderedPages); i++ {
+		for j := i; j > 0; j-- {
+			si := sectionMap[orderedPages[j].SectionSlug].Order
+			sj := sectionMap[orderedPages[j-1].SectionSlug].Order
+			if si < sj || (si == sj && orderedPages[j].Order < orderedPages[j-1].Order) {
+				orderedPages[j], orderedPages[j-1] = orderedPages[j-1], orderedPages[j]
+			}
+		}
+	}
+}
+
+// --- Helpers ---
+
+func sectionsToAny() []any {
+	out := make([]any, len(sections))
 	for i, s := range sections {
-		sectionsAny[i] = s
+		out[i] = s
 	}
-	eng.SetGlobal("sections", sectionsAny)
-
-	pagesAny := make([]any, len(pages))
-	for i, p := range pages {
-		pagesAny[i] = p
-	}
-	eng.SetGlobal("all_pages", pagesAny)
-
-	r := chi.NewRouter()
-	r.Use(middleware.Logger)
-	r.Use(middleware.Recoverer)
-
-	r.Get("/", func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, "/docs/getting-started/installation", http.StatusFound)
-	})
-	r.Get("/docs/{section}/{page}", pageHandler(eng))
-
-	staticDir := filepath.Join(filepath.Dir(thisFile), "static")
-	r.Handle("/static/*", http.StripPrefix("/static/", http.FileServer(http.Dir(staticDir))))
-
-	fmt.Println("Grove Docs listening on http://localhost:3003")
-	log.Fatal(http.ListenAndServe(":3003", r))
+	return out
 }
 
-func pageHandler(eng *grove.Engine) http.HandlerFunc {
+func pagesToAny(pp []DocPage) []any {
+	out := make([]any, len(pp))
+	for i, p := range pp {
+		out[i] = p
+	}
+	return out
+}
+
+func filtersToAny(ff []FilterEntry) []any {
+	out := make([]any, len(ff))
+	for i, f := range ff {
+		out[i] = f
+	}
+	return out
+}
+
+func sectionPages(sectionSlug string) []DocPage {
+	var out []DocPage
+	for _, p := range orderedPages {
+		if p.SectionSlug == sectionSlug {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+func prevNextPages(slug string) (prev, next map[string]any) {
+	for i, p := range orderedPages {
+		if p.Slug == slug {
+			if i > 0 {
+				pp := orderedPages[i-1]
+				prev = map[string]any{
+					"title":        pp.Title,
+					"slug":         pp.Slug,
+					"section_slug": pp.SectionSlug,
+				}
+			}
+			if i < len(orderedPages)-1 {
+				np := orderedPages[i+1]
+				next = map[string]any{
+					"title":        np.Title,
+					"slug":         np.Slug,
+					"section_slug": np.SectionSlug,
+				}
+			}
+			break
+		}
+	}
+	return
+}
+
+func filterFilters(query, category string) []FilterEntry {
+	var out []FilterEntry
+	q := strings.ToLower(query)
+	for _, f := range filterList {
+		if category != "" && !strings.EqualFold(f.Category, category) {
+			continue
+		}
+		if q != "" && !strings.Contains(strings.ToLower(f.Name), q) && !strings.Contains(strings.ToLower(f.Description), q) {
+			continue
+		}
+		out = append(out, f)
+	}
+	return out
+}
+
+func filterCategories() []any {
+	seen := make(map[string]bool)
+	var out []any
+	for _, f := range filterList {
+		if !seen[f.Category] {
+			seen[f.Category] = true
+			out = append(out, f.Category)
+		}
+	}
+	return out
+}
+
+// --- Handlers ---
+
+func landingHandler(eng *grove.Engine) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		slug := chi.URLParam(r, "page")
-		var found *DocPage
-		for i := range pages {
-			if pages[i].Slug == slug {
-				found = &pages[i]
-				break
-			}
-		}
-		if found == nil {
-			http.NotFound(w, r)
-			return
-		}
-
-		// Find prev/next pages.
-		var prev, next map[string]any
-		for i, p := range pages {
-			if p.Slug == slug {
-				if i > 0 {
-					pp := pages[i-1]
-					prev = map[string]any{
-						"title":   pp.Title,
-						"section": pp.Section,
-						"slug":    pp.Slug,
-					}
-				}
-				if i < len(pages)-1 {
-					np := pages[i+1]
-					next = map[string]any{
-						"title":   np.Title,
-						"section": np.Section,
-						"slug":    np.Slug,
-					}
-				}
-				break
-			}
-		}
-
-		sectionSlug := strings.ReplaceAll(strings.ToLower(found.Section), " ", "-")
-		templateName := "pages/" + found.Slug + ".grov"
-
-		// Check if a specific page template exists; fall back to generic.
-		_, err := eng.LoadTemplate(templateName)
-		if err != nil {
-			templateName = "pages/_default.grov"
-		}
-
-		result, err := eng.Render(r.Context(), templateName, grove.Data{
-			"page":         *found,
-			"section_slug": sectionSlug,
-			"prev":         prev,
-			"next":         next,
+		result, err := eng.Render(r.Context(), "landing.grov", grove.Data{
+			"sections":  sectionsToAny(),
+			"all_pages": pagesToAny(orderedPages),
 		})
 		if err != nil {
 			http.Error(w, err.Error(), 500)
@@ -177,6 +246,105 @@ func pageHandler(eng *grove.Engine) http.HandlerFunc {
 		writeResult(w, result)
 	}
 }
+
+func sectionHandler(eng *grove.Engine) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		slug := chi.URLParam(r, "section")
+		sec, ok := sectionMap[slug]
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+		sp := sectionPages(slug)
+		result, err := eng.Render(r.Context(), "section.grov", grove.Data{
+			"section":       sec,
+			"section_pages": pagesToAny(sp),
+			"sections":      sectionsToAny(),
+			"all_pages":     pagesToAny(orderedPages),
+			"breadcrumbs": []any{
+				map[string]any{"label": "Docs", "href": "/"},
+				map[string]any{"label": sec.Name, "href": ""},
+			},
+		})
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		writeResult(w, result)
+	}
+}
+
+func pageHandler(eng *grove.Engine) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		sectionSlug := chi.URLParam(r, "section")
+		pageSlug := chi.URLParam(r, "page")
+
+		page, ok := pageMap[pageSlug]
+		if !ok || page.SectionSlug != sectionSlug {
+			http.NotFound(w, r)
+			return
+		}
+
+		sec := sectionMap[sectionSlug]
+		prev, next := prevNextPages(pageSlug)
+
+		// Try specific template, fall back to _default.grov
+		templateName := "pages/" + pageSlug + ".grov"
+		if _, err := eng.LoadTemplate(templateName); err != nil {
+			templateName = "pages/_default.grov"
+		}
+
+		result, err := eng.Render(r.Context(), templateName, grove.Data{
+			"page":         page,
+			"section":      sec,
+			"section_slug": sectionSlug,
+			"sections":     sectionsToAny(),
+			"all_pages":    pagesToAny(orderedPages),
+			"prev":         prev,
+			"next":         next,
+			"breadcrumbs": []any{
+				map[string]any{"label": "Docs", "href": "/"},
+				map[string]any{"label": sec.Name, "href": "/docs/" + sectionSlug},
+				map[string]any{"label": page.Title, "href": ""},
+			},
+		})
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		writeResult(w, result)
+	}
+}
+
+func filterRefHandler(eng *grove.Engine) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query().Get("q")
+		cat := r.URL.Query().Get("category")
+		filtered := filterFilters(q, cat)
+
+		result, err := eng.Render(r.Context(), "pages/filters.grov", grove.Data{
+			"filters":           filtersToAny(filtered),
+			"filter_categories": filterCategories(),
+			"query":             q,
+			"active_category":   cat,
+			"result_count":      len(filtered),
+			"sections":          sectionsToAny(),
+			"all_pages":         pagesToAny(orderedPages),
+			"breadcrumbs": []any{
+				map[string]any{"label": "Docs", "href": "/"},
+				map[string]any{"label": "Template Syntax", "href": "/docs/template-syntax"},
+				map[string]any{"label": "Filter Reference", "href": ""},
+			},
+		})
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		writeResult(w, result)
+	}
+}
+
+// --- Response assembly ---
 
 func writeResult(w http.ResponseWriter, result grove.RenderResult) {
 	body := result.Body
@@ -198,4 +366,59 @@ func writeResult(w http.ResponseWriter, result grove.RenderResult) {
 	fmt.Fprint(w, body)
 }
 
-var _ interface{ GroveResolve(string) (any, bool) } = DocPage{}
+// --- Main ---
+
+func main() {
+	_, thisFile, _, _ := runtime.Caller(0)
+	baseDir := filepath.Dir(thisFile)
+
+	loadData(baseDir)
+
+	templateDir := filepath.Join(baseDir, "templates")
+	fsStore := grove.NewFileSystemStore(templateDir)
+	eng := grove.New(
+		grove.WithStore(fsStore),
+		grove.WithSandbox(grove.SandboxConfig{
+			AllowedTags: []string{
+				"if", "elif", "else", "for", "empty", "set", "let",
+				"block", "extends", "include", "render", "import",
+				"component", "slot", "fill", "props",
+				"macro", "call", "capture", "range",
+				"asset", "meta", "hoist",
+			},
+			AllowedFilters: []string{
+				"upper", "lower", "title", "capitalize", "default", "truncate", "length",
+				"join", "split", "replace", "trim", "lstrip", "rstrip", "nl2br", "safe",
+				"floor", "ceil", "abs", "round", "int", "float",
+				"first", "last", "sort", "reverse", "unique", "min", "max", "sum",
+				"map", "batch", "flatten", "keys", "values",
+				"escape", "striptags", "string", "bool", "wordcount",
+				"center", "ljust", "rjust",
+			},
+			MaxLoopIter: 500,
+		}),
+	)
+	eng.SetGlobal("site_name", "Grove Docs")
+	eng.SetGlobal("current_year", "2026")
+
+	r := chi.NewRouter()
+	r.Use(middleware.Logger)
+	r.Use(middleware.Recoverer)
+
+	r.Get("/", landingHandler(eng))
+	r.Get("/docs/filters", filterRefHandler(eng))
+	r.Get("/docs/{section}", sectionHandler(eng))
+	r.Get("/docs/{section}/{page}", pageHandler(eng))
+
+	staticDir := filepath.Join(baseDir, "static")
+	r.Handle("/static/*", http.StripPrefix("/static/", http.FileServer(http.Dir(staticDir))))
+
+	fmt.Println("Grove Docs listening on http://localhost:3002")
+	log.Fatal(http.ListenAndServe(":3002", r))
+}
+
+var (
+	_ interface{ GroveResolve(string) (any, bool) } = Section{}
+	_ interface{ GroveResolve(string) (any, bool) } = DocPage{}
+	_ interface{ GroveResolve(string) (any, bool) } = FilterEntry{}
+)

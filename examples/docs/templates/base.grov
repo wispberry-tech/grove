@@ -4,7 +4,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{% block title %}Grove Docs{% endblock %}</title>
+  <title>{% block title %}{{ site_name }}{% endblock %}</title>
   <!-- HEAD_ASSETS -->
   <!-- HEAD_META -->
   <!-- HEAD_HOISTED -->
@@ -13,17 +13,21 @@
   {% block nav %}
   <nav class="nav">
     <a href="/" class="nav-brand">{{ site_name }}</a>
+    <div class="nav-links">
+      {% for section in sections %}
+        <a href="/docs/{{ section.slug }}" class="nav-link">{{ section.name }}</a>
+      {% endfor %}
+      <a href="/docs/filters" class="nav-link">Filter Reference</a>
+    </div>
   </nav>
   {% endblock %}
-  <div class="docs-layout">
-    {% block layout %}
-      <main class="container">
-        {% block content %}{% endblock %}
-      </main>
-    {% endblock %}
-  </div>
+  {% block layout %}
+  <main class="container">
+    {% block content %}{% endblock %}
+  </main>
+  {% endblock %}
   <footer class="footer">
-    <p>© {{ current_year }} Grove Docs. Built with the Grove template engine.</p>
+    <p>&copy; {{ current_year }} {{ site_name }}. Built with the Grove template engine.</p>
   </footer>
   <!-- FOOT_ASSETS -->
 </body>

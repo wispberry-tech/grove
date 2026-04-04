@@ -1,0 +1,8 @@
+{% macro code(label, content) %}
+<div class="code-example">
+  {% if label %}
+    <div class="code-label">{{ label }}</div>
+  {% endif %}
+  <pre><code>{{ content }}</code></pre>
+</div>
+{% endmacro %}

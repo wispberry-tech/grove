@@ -1,0 +1,20 @@
+{% extends "docs-layout.grov" %}
+
+{% block title %}{{ section.name }} &mdash; {{ site_name }}{% endblock %}
+
+{% block content %}
+{% meta name="description" content="Grove template engine documentation" %}
+
+<h1>{{ section.name }}</h1>
+<p class="section-description">{{ section.description }}</p>
+
+<div class="page-list">
+  {% for pg in section_pages %}
+    <a href="/docs/{{ pg.section_slug }}/{{ pg.slug }}" class="page-list-item">
+      <h3>{{ pg.title }}</h3>
+    </a>
+  {% empty %}
+    <p>No pages in this section yet.</p>
+  {% endfor %}
+</div>
+{% endblock %}

@@ -4,10 +4,13 @@
 {% block title %}{{ page.title }} &mdash; {{ site_name }}{% endblock %}
 
 {% block content %}
-{% meta name="description" content="Grove template engine documentation" %}
+{% meta name="description" content="How template inheritance works in Grove" %}
 
 <article class="doc-page">
   <h1>{{ page.title }}</h1>
+
+  {{ adm.tip("This page is itself rendered using 3-level template inheritance. The base template defines the HTML shell, docs-layout adds the sidebar, and this page fills in the content. View the template source to see it in action.") }}
+
   <div class="doc-body">
     {{ page.body | safe }}
   </div>

@@ -1,16 +1,22 @@
-<nav class="sidebar">
+<nav class="sidebar-nav">
   {% for section in sections %}
-    <h3 class="sidebar-heading">{{ section }}</h3>
-    {% for page in all_pages %}
-      {% if page.section == section %}
-        {% set section_slug = section | lower | replace(" ", "-") %}
-        {% set href = "/docs/" ~ section_slug ~ "/" ~ page.slug %}
-        {% if page.slug == current_slug %}
-          <a href="{{ href }}" class="sidebar-link sidebar-link-active">{{ page.title }}</a>
-        {% else %}
-          <a href="{{ href }}" class="sidebar-link">{{ page.title }}</a>
-        {% endif %}
-      {% endif %}
-    {% endfor %}
+    {% set section_slug = section.slug %}
+    <div class="sidebar-section">
+      <h3 class="sidebar-section-title">
+        <a href="/docs/{{ section_slug }}">{{ section.name }}</a>
+      </h3>
+      <ul class="sidebar-page-list">
+        {% for pg in all_pages %}
+          {% if pg.section_slug == section_slug %}
+            {% set href = "/docs/" ~ section_slug ~ "/" ~ pg.slug %}
+            {% if pg.slug == current_slug %}
+              <li><a href="{{ href }}" class="sidebar-active">{{ pg.title }}</a></li>
+            {% else %}
+              <li><a href="{{ href }}">{{ pg.title }}</a></li>
+            {% endif %}
+          {% endif %}
+        {% endfor %}
+      </ul>
+    </div>
   {% endfor %}
 </nav>

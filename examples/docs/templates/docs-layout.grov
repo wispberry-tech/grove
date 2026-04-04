@@ -2,20 +2,16 @@
 
 {% block nav %}
   {{ super() }}
-  <div class="breadcrumb-bar">
-    <span class="crumb-root">Documentation</span>
-    {% if page %}
-      <span class="crumb-sep"> / </span>
-      <span class="crumb-section">{{ page.section }}</span>
-      <span class="crumb-sep"> / </span>
-      <span class="crumb-active">{{ page.title }}</span>
-    {% endif %}
-  </div>
+  {% render "partials/breadcrumbs.grov" breadcrumbs=breadcrumbs %}
 {% endblock %}
 
 {% block layout %}
-  {% render "partials/sidebar.grov" sections=sections all_pages=all_pages current_slug=page.slug %}
-  <main class="docs-main">
+<div class="docs-layout">
+  <aside class="docs-sidebar">
+    {% render "partials/sidebar.grov" sections=sections all_pages=all_pages current_slug=page.slug %}
+  </aside>
+  <main class="docs-content">
     {% block content %}{% endblock %}
   </main>
+</div>
 {% endblock %}
